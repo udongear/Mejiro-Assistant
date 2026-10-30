@@ -275,7 +275,7 @@ function initFirebase() {
   const cfg = window.FIREBASE_CONFIG;
   if (location.protocol === 'file:') {
     $('#legacyExport').classList.toggle('hidden', !readLocalState());
-    return showLogin('Google sign-in needs a web address. Open the site from Firebase Hosting, or run "firebase emulators:start" and open http://localhost:5000.');
+    return showLogin('Google sign-in needs a web address. Open the published site, or use VS Code Live Server at http://localhost:5500 (see FIREBASE_SETUP.md).');
   }
   if (!window.firebase || !cfg || !cfg.apiKey) {
     return showLogin("Firebase isn't set up yet. Paste your project's config into firebase-config.js.");
@@ -315,7 +315,7 @@ $('#googleBtn').addEventListener('click', async () => {
     }
     if (err.code !== 'auth/popup-closed-by-user' && err.code !== 'auth/cancelled-popup-request') {
       showLogin(err.code === 'auth/unauthorized-domain'
-        ? `This address (${location.hostname}) isn't allowed to sign in yet. Add it in Firebase console → Authentication → Settings → Authorized domains.`
+        ? `This address (${location.hostname}) isn't allowed to sign in yet. Add it in Firebase console → Authentication → Settings → Authorized domains.${location.hostname === '127.0.0.1' ? ' Or use localhost instead of 127.0.0.1.' : ''}`
         : 'Sign-in failed: ' + err.message);
     }
   }
