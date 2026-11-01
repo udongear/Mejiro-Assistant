@@ -12,11 +12,8 @@ const DEFAULT_MATRIX = [
   [500, 5], [1000, 3.33], [10000, 1], [25000, 0.66], [50000, 0.5], [100000, 0.33],
 ].map(([size, pct]) => ({ size, pct }));
 
-const DEFAULT_TRACKS = [
-  { name: 'Emerald Downs', code: 'EMD' },
-  { name: 'Keeneland', code: 'KEE' },
-  { name: 'Los Alamitos', code: 'LRC' },
-];
+// The Calendar opens on the first of these (Emerald Downs, Keeneland, Los Alamitos) until you pick a track
+const HOME_TRACKS = ['EMD', 'KEE', 'LRC'];
 
 const DEFAULT_SETTINGS = {
   startingBankroll: 100,
@@ -34,7 +31,6 @@ function freshState() {
     bets: [],
     calTrack: null,
     matrix: DEFAULT_MATRIX.map(t => ({ ...t })),
-    tracks: DEFAULT_TRACKS.map(t => ({ ...t })),
     settings: { ...DEFAULT_SETTINGS },
   };
 }
@@ -55,7 +51,7 @@ function readLocalState() {
    users/{uid}/bets/{betId}  one document per bet
    save() is called after every change; it writes only what differs from the last sync. */
 
-const PREF_KEYS = ['settings', 'matrix', 'calTrack', 'calHideInactive', 'calHideNoDays', 'wrRange'];
+const PREF_KEYS = ['settings', 'matrix', 'calTrack', 'calHideInactive', 'calHideNoDays', 'wrRange', 'todayTz'];
 
 let fb = null;  // { auth, db } once Firebase is set up
 let synced = { prefs: '', bets: new Map() };  // last known Firestore copy (bet id → JSON)
@@ -133,8 +129,6 @@ function localISO(d) {
 
 function today() { return localISO(new Date()); }
 
-function fmtTime(d) { return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); }
-
 function money(n, signed = false) {
   const s = Math.abs(n).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
   if (!signed) return n < 0 ? '-' + s : s;
@@ -153,17 +147,6 @@ function fmtDate(iso) {
   if (!iso) return '';
   const [y, m, d] = iso.split('-').map(Number);
   return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-}
-
-// "5-2" → 2.5, "3/1" → 3, "even" → 1
-function oddsToDecimal(s) {
-  const t = String(s ?? '').trim().toLowerCase();
-  if (!t) return null;
-  if (t === 'even' || t === 'evn' || t === 'evens') return 1;
-  const m = t.match(/^(\d+(?:\.\d+)?)\s*[-/:]\s*(\d+(?:\.\d+)?)$/);
-  if (m) return num(m[1]) / num(m[2] || 1);
-  const n = parseFloat(t);
-  return Number.isFinite(n) ? n : null;
 }
 
 /* ---------- Money math ---------- */
@@ -420,8 +403,82 @@ $('#winRate').addEventListener('click', e => {
   renderWinRate();
 });
 
+/* ----- Racing today (from the Calendar data) ----- */
+
+const TZ_CHOICES = [['local', 'My time'], ['America/New_York', 'Eastern'], ['America/Chicago', 'Central'],
+  ['America/Denver', 'Mountain'], ['America/Phoenix', 'Arizona'], ['America/Los_Angeles', 'Pacific']];
+const CARD_HOURS = 5;  // a card usually runs about this long after first post; "LIVE" until then
+
+// A date + wall-clock time at the track, as an absolute moment (handles daylight saving)
+const tzFormatters = {};
+function zonedTime(date, time, tz) {
+  const [y, m, d] = date.split('-').map(Number), [hh, mm] = time.split(':').map(Number);
+  if (!tz) return new Date(y, m - 1, d, hh, mm);
+  const guess = Date.UTC(y, m - 1, d, hh, mm);
+  const fmt = tzFormatters[tz] || (tzFormatters[tz] = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric',
+  }));
+  const p = Object.fromEntries(fmt.formatToParts(new Date(guess)).map(x => [x.type, +x.value]));
+  return new Date(guess - (Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute) - guess));
+}
+
+function renderToday() {
+  const t = today();
+  const active = new Set(activeTracks().map(x => x.code));
+  // One entry per track: its earliest card today (a mixed track can run two breeds)
+  const byTrack = new Map();
+  CAL.race_days.forEach(d => {
+    if (d.race_date !== t || d.status === 'cancelled' || !active.has(d.track_code)) return;
+    const cur = byTrack.get(d.track_code);
+    if (!cur || (d.first_post_local && (!cur.first_post_local || d.first_post_local < cur.first_post_local))) byTrack.set(d.track_code, d);
+  });
+  const now = Date.now();
+  const tz = TZ_CHOICES.some(([k]) => k === state.todayTz) ? state.todayTz : 'local';
+  const races = [...byTrack.values()].map(d => {
+    const post = d.first_post_local ? zonedTime(t, d.first_post_local, d.timezone) : null;
+    return { ...d, post, live: post && now >= post && now < post.getTime() + CARD_HOURS * 3600000 };
+  }).sort((a, b) => (b.live - a.live) || ((a.post || Infinity) - (b.post || Infinity)) || a.track_name.localeCompare(b.track_name));
+  const anyTimes = races.some(r => r.post);
+
+  const time = r => r.live ? '<span class="badge live">LIVE</span>'
+    : r.post ? r.post.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZoneName: 'short', ...(tz === 'local' ? {} : { timeZone: tz }) })
+    : '<span class="muted">Time TBA</span>';
+
+  $('#todayCard').innerHTML = `
+    <div class="card-head">
+      <h3>Racing today <span class="muted small-text">${parseDate(t).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}</span></h3>
+      ${anyTimes ? `<select id="todayTz" class="tz-select" aria-label="Time zone">${TZ_CHOICES.map(([k, label]) =>
+        `<option value="${k}" ${k === tz ? 'selected' : ''}>${label}</option>`).join('')}</select>` : ''}
+    </div>
+    <div class="today-list">${races.map(r => `
+      <button type="button" class="today-item" data-code="${esc(r.track_code)}" title="Open in Calendar">
+        <span><span class="name">${esc(r.track_name)}</span><span class="muted tiny"> ${esc(r.state)} · ${esc(r.breed)}</span></span>
+        <span class="time">${time(r)}</span>
+      </button>`).join('') || '<p class="muted small-text">No racing at active tracks today.</p>'}</div>`;
+}
+
+$('#todayCard').addEventListener('change', e => {
+  if (e.target.id !== 'todayTz') return;
+  state.todayTz = e.target.value;
+  save();
+  renderToday();
+});
+
+$('#todayCard').addEventListener('click', e => {
+  const item = e.target.closest('[data-code]');
+  if (!item) return;
+  state.calTrack = item.dataset.code;
+  save();
+  goTab('calendar');
+  renderCalendarTab();
+});
+
+// Keep LIVE badges and the date current while the page stays open
+setInterval(() => { if (state.user) renderToday(); }, 60000);
+
 function renderTracker() {
   renderWinRate();
+  renderToday();
   const br = bankroll();
   const tier = currentTier(br);
   $('#stats').innerHTML = `
@@ -525,15 +582,12 @@ $('#betForm').addEventListener('submit', e => {
 
 // Bets saved before the Tracker logged results are still "open"; History settles them
 function openWonModal(bet) {
-  const dec = oddsToDecimal(bet.odds);
-  const estimate = bet.type === 'Win' && dec != null ? (num(bet.stake) * (dec + 1)).toFixed(2) : '';
   openModal(`
-    <h3>${esc(bet.horse)} won 🎉</h3>
+    <h3>${esc(horseLabel(bet.horse))} won 🎉</h3>
     <p>Enter the total return shown on TwinSpires (payout including your stake).</p>
     <form id="wonForm" class="form">
-      <label class="full">Total return ($)<input type="number" name="payout" min="0" step="0.01" required value="${estimate}"></label>
+      <label class="full">Total return ($)<input type="number" name="payout" min="0" step="0.01" required></label>
     </form>
-    ${estimate ? `<p class="tiny">Prefilled from ${esc(bet.odds)} odds — final tote payout will differ.</p>` : ''}
     <div class="modal-actions">
       <button class="btn ghost" id="wonCancel">Cancel</button>
       <button class="btn primary" form="wonForm">Settle as won</button>
@@ -560,7 +614,7 @@ function settleBet(bet, status, payout) {
 
 /* =========================================================
    Calendar — one racetrack at a time, from calendar-data.js
-   (generated by mejiro-calendar; run Sync Calendar.bat to refresh)
+   (generated by the calendar folder; run its Sync Calendar.bat to refresh)
    ========================================================= */
 
 const CAL = window.MEJIRO_CALENDAR || { tracks: [], meets: [], race_days: [], events: [] };
@@ -618,11 +672,11 @@ function trackOptions(tracks, notes = false) {
     .join('')}</optgroup>`).join('');
 }
 
-// Last pick, else the first of your tracks that the calendar knows, else the first track
+// Last pick, else the first home track in the list, else the first track
 function calSelectedCode(tracks) {
   const known = code => tracks.some(t => t.code === code);
   if (known(state.calTrack)) return state.calTrack;
-  return state.tracks.map(t => t.code).find(known) || tracks[0]?.code;
+  return HOME_TRACKS.find(known) || tracks[0]?.code;
 }
 
 // The current month and the 11 after it
@@ -635,7 +689,7 @@ let calView = { byDate: new Map(), ranges: [] };
 
 function renderCalendarTab() {
   if (!CAL.tracks.length) {
-    $('#calGrid').innerHTML = `<div class="card"><p class="empty">No calendar data found. Run <b>mejiro-calendar\\Sync Calendar.bat</b> to create <code>calendar-data.js</code>, then reload.</p></div>`;
+    $('#calGrid').innerHTML = `<div class="card"><p class="empty">No calendar data found. Run <b>calendar\\Sync Calendar.bat</b> to create <code>calendar-data.js</code>, then reload.</p></div>`;
     return;
   }
   const hideInactive = state.calHideInactive !== false;
@@ -735,7 +789,7 @@ function renderCalendarTab() {
       </tr>`).join('') || '<tr><td colspan="7" class="empty">No meets in the next 12 months.</td></tr>'}</tbody>`;
 
   $('#calSource').textContent = CAL.generated_at
-    ? `Calendar data from mejiro-calendar, generated ${new Date(CAL.generated_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}. Run Sync Calendar.bat to refresh it.`
+    ? `Calendar data generated ${new Date(CAL.generated_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}. Run Sync Calendar.bat to refresh it.`
     : '';
 }
 
@@ -963,7 +1017,7 @@ function download(name, text, type) {
 }
 
 $('#exportCsv').addEventListener('click', () => {
-  const cols = ['date', 'track', 'race', 'horse', 'type', 'odds', 'stake', 'status', 'payout', 'profit', 'debut', 'notes'];
+  const cols = ['date', 'track', 'race', 'horse', 'type', 'stake', 'status', 'payout', 'profit'];
   const cell = v => /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : v;
   const lines = state.bets.map(b => cols.map(c => cell(c === 'profit' ? profitOf(b).toFixed(2) : b[c] ?? '')).join(','));
   download(`mejiro-bets-${today()}.csv`, [cols.join(','), ...lines].join('\n'), 'text/csv');

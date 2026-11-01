@@ -39,7 +39,7 @@ Browsers keep saved data separately per address, so the online site can't see wh
 
 ## Updating the race calendar
 
-Run `mejiro-calendar\Sync Calendar.bat` (needs Python), then `Build Site.bat`, and drag the new `site` folder onto Netlify.
+Run `calendar\Sync Calendar.bat` (needs Python), then `Build Site.bat`, and drag the new `site` folder onto Netlify.
 
 ## Where the data lives
 
