@@ -179,6 +179,19 @@ input[type="date"] { color-scheme: dark; }
 .seg:hover { color: var(--text); }
 .seg.active { background: var(--lavender); color: var(--black); }
 
+/* Tracker: racing today */
+.tz-select { width: auto; padding: 6px 10px; font-size: 13px; }
+.today-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; margin-top: 8px; }
+.today-item {
+  display: flex; justify-content: space-between; align-items: center; gap: 10px; text-align: left;
+  padding: 10px 12px; border: 1px solid transparent; border-radius: 10px; background: var(--surface-2);
+  color: var(--text); font: 13px var(--font); cursor: pointer;
+}
+.today-item:hover { border-color: var(--lavender); }
+.today-item .name { font-weight: 600; }
+.today-item .time { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.badge.live { background: var(--loss); color: #fff; animation: pulse 1.6s ease-in-out infinite; }
+
 /* Tracker: log bets */
 .bet-shared { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
 .bet-shared label { width: 220px; max-width: 100%; }
