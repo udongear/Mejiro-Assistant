@@ -44,6 +44,7 @@
       </div>
       <nav class="nav" id="nav">
         <button data-tab="tracker" class="active">Tracker</button>
+        <button data-tab="strategies">Strategies</button>
         <button data-tab="calendar">Calendar</button>
         <button data-tab="matrix">Risk Matrix</button>
         <button data-tab="history">History</button>
@@ -87,6 +88,19 @@
               <button class="btn primary" type="submit" id="logBetsBtn">Log bet</button>
             </div>
           </form>
+        </div>
+      </section>
+
+      <!-- ---------- STRATEGIES ---------- -->
+      <section id="tab-strategies" class="tab">
+        <header class="tab-head">
+          <h2>Strategies</h2>
+          <div class="head-actions">
+            <button class="btn primary" id="addStrategy" type="button">+ Add strategy</button>
+          </div>
+        </header>
+        <div class="card">
+          <ul class="strategy-list" id="strategyList"></ul>
         </div>
       </section>
 
@@ -178,6 +192,15 @@
                 </select>
               </label>
             </div>
+          </div>
+          <div class="card">
+            <h3>First race times</h3>
+            <div class="form">
+              <label class="full">Apify results link (optional)
+                <input type="url" name="postTimesUrl" placeholder="https://api.apify.com/v2/actor-tasks/…/runs/last/dataset/items?token=…">
+              </label>
+            </div>
+            <p class="muted small-text">Fills in first-race times under Racing today. Setup steps are in APIFY_SETUP.md. The link contains your Apify key, so it's saved only in your account.</p>
           </div>
           <div class="settings-actions">
             <button class="btn primary" type="submit">Save settings</button>

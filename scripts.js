@@ -30,6 +30,7 @@ function freshState() {
     user: null,
     bets: [],
     calTrack: null,
+    strategies: [],  // { id, text }, in display order
     matrix: DEFAULT_MATRIX.map(t => ({ ...t })),
     settings: { ...DEFAULT_SETTINGS },
   };
@@ -51,7 +52,7 @@ function readLocalState() {
    users/{uid}/bets/{betId}  one document per bet
    save() is called after every change; it writes only what differs from the last sync. */
 
-const PREF_KEYS = ['settings', 'matrix', 'calTrack', 'calHideInactive', 'calHideNoDays', 'wrRange', 'todayTz'];
+const PREF_KEYS = ['settings', 'matrix', 'calTrack', 'calHideInactive', 'calHideNoDays', 'wrRange', 'todayTz', 'strategies'];
 
 let fb = null;  // { auth, db } once Firebase is set up
 let synced = { prefs: '', bets: new Map() };  // last known Firestore copy (bet id → JSON)
@@ -336,6 +337,7 @@ function renderAll() {
   renderUser();
   renderTrackSelects();
   renderTracker();
+  renderStrategies();
   renderCalendarTab();
   renderMatrix();
   renderHistory();
@@ -676,6 +678,73 @@ function settleBet(bet, status, payout) {
   const p = profitOf(bet);
   toast(status === 'scratched' ? 'Marked as scratched (stake returned)' : `Settled: ${money(p, true)}`);
 }
+
+/* =========================================================
+   Strategies — short notes, reordered by dragging the ☰ handle
+   ========================================================= */
+
+function renderStrategies() {
+  $('#strategyList').innerHTML = (state.strategies || []).map(s => `
+    <li class="strategy" data-id="${s.id}">
+      <button type="button" class="drag-handle" title="Drag to reorder" aria-label="Drag to reorder">☰</button>
+      <textarea rows="2" placeholder="Describe a strategy…">${esc(s.text)}</textarea>
+      <button type="button" class="btn tiny-btn ghost danger" data-delete-strategy title="Delete">✕</button>
+    </li>`).join('') || '<li class="empty">No strategies yet. Click <b>+ Add strategy</b> to write one.</li>';
+}
+
+const strategyById = id => state.strategies.find(s => s.id === id);
+
+$('#addStrategy').addEventListener('click', () => {
+  state.strategies = [...(state.strategies || []), { id: uid(), text: '' }];
+  save();
+  renderStrategies();
+  $$('#strategyList textarea').pop().focus();
+});
+
+// Typing saves without re-rendering, so the cursor stays put
+$('#strategyList').addEventListener('input', e => {
+  if (e.target.tagName !== 'TEXTAREA') return;
+  strategyById(e.target.closest('.strategy').dataset.id).text = e.target.value;
+  save();
+});
+
+$('#strategyList').addEventListener('click', async e => {
+  if (!e.target.closest('[data-delete-strategy]')) return;
+  const s = strategyById(e.target.closest('.strategy').dataset.id);
+  if (s.text.trim() && !await confirmModal('Delete strategy?', 'This removes it permanently.', 'Delete', true)) return;
+  state.strategies = state.strategies.filter(x => x !== s);
+  save();
+  renderStrategies();
+});
+
+// Drag with pointer events (works with mouse and touch): the row follows the handle,
+// and the list reorders as it passes other rows
+$('#strategyList').addEventListener('pointerdown', e => {
+  const handle = e.target.closest('.drag-handle');
+  if (!handle) return;
+  e.preventDefault();
+  const row = handle.closest('.strategy');
+  const list = $('#strategyList');
+  row.classList.add('dragging');
+  try { handle.setPointerCapture(e.pointerId); } catch (err) { /* capture is a nicety; dragging still works */ }
+
+  const move = ev => {
+    const others = [...list.children].filter(li => li !== row);
+    const after = others.find(li => ev.clientY < li.getBoundingClientRect().top + li.offsetHeight / 2);
+    if (after) { if (row.nextElementSibling !== after) list.insertBefore(row, after); }
+    else if (list.lastElementChild !== row) list.appendChild(row);
+  };
+  const end = () => {
+    handle.removeEventListener('pointermove', move);
+    row.classList.remove('dragging');
+    const order = [...list.children].map(li => li.dataset.id);
+    state.strategies = order.map(strategyById).filter(Boolean);
+    save();
+  };
+  handle.addEventListener('pointermove', move);
+  handle.addEventListener('pointerup', end, { once: true });
+  handle.addEventListener('pointercancel', end, { once: true });
+});
 
 /* =========================================================
    Calendar — one racetrack at a time, from calendar-data.js
