@@ -185,6 +185,13 @@ input[type="date"] { color-scheme: dark; }
   color: var(--text); font: 13px var(--font); cursor: pointer;
 }
 .today-item:hover { border-color: var(--lavender); }
+/* Purple = live-streams on YouTube; grey (default) = no stream */
+.today-item.stream { background: rgba(123, 97, 255, .2); border-color: rgba(123, 97, 255, .6); }
+.today-item:not(.stream) { color: var(--muted); }
+.stream-key { display: inline-flex; gap: 12px; font-size: 12px; color: var(--muted); }
+.stream-key span { display: inline-flex; align-items: center; gap: 6px; }
+.stream-key .key { width: 10px; height: 10px; border-radius: 3px; background: var(--surface-2); border: 1px solid var(--border); }
+.stream-key .key.stream { background: rgba(123, 97, 255, .5); border-color: var(--violet); }
 .today-item .name { font-weight: 600; }
 .today-item .time { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .badge.live { background: var(--loss); color: #fff; animation: pulse 1.6s ease-in-out infinite; }

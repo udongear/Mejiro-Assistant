@@ -22,6 +22,8 @@ CREATE TABLE IF NOT EXISTS tracks (
     status      TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','inactive','closed')),
     usta_code   TEXT,                          -- harness track code used by the USTA (for the USTA sync)
     website     TEXT,
+    youtube     TEXT,                          -- official YouTube channel URL, if any
+    livestream  INTEGER NOT NULL DEFAULT 0 CHECK (livestream IN (0,1)),  -- 1 = races are live-streamed on that channel
     aliases     TEXT,                          -- '|' separated names used by outside feeds (for matching)
     notes       TEXT,
     updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
@@ -166,6 +168,7 @@ JOIN tracks t ON t.track_id = m.track_id;
 DROP VIEW IF EXISTS v_tracks;
 CREATE VIEW v_tracks AS
 SELECT t.code, t.name, t.city, t.state, t.track_type, t.breeds, t.timezone, t.status, t.website,
+       t.youtube, t.livestream,
        (SELECT MIN(rd.race_date) FROM race_days rd
          WHERE rd.track_id = t.track_id AND rd.race_date >= date('now') AND rd.status <> 'cancelled') AS next_race_date,
        (SELECT m.name FROM meets m

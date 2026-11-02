@@ -179,6 +179,13 @@ def connect(db_path: Path) -> sqlite3.Connection:
 
 
 def ensure_schema(conn: sqlite3.Connection, schema_path: Path = DEFAULT_SCHEMA) -> None:
+    # Columns added after the first release. Add them before schema.sql rebuilds the views that use them.
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tracks'").fetchone():
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(tracks)")}
+        if "youtube" not in cols:
+            conn.execute("ALTER TABLE tracks ADD COLUMN youtube TEXT")
+        if "livestream" not in cols:
+            conn.execute("ALTER TABLE tracks ADD COLUMN livestream INTEGER NOT NULL DEFAULT 0")
     conn.executescript(schema_path.read_text(encoding="utf-8"))
     conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', ?)", (SCHEMA_VERSION,))
     conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('calendar_window', ?)",
@@ -314,22 +321,26 @@ class SeedSource:
         for t in tracks:
             cur = conn.execute(
                 """INSERT INTO tracks(code, name, city, state, track_type, breeds, timezone, status,
-                                      usta_code, website, aliases, notes)
+                                      usta_code, website, youtube, livestream, aliases, notes)
                    VALUES (:code,:name,:city,:state,:track_type,:breeds,:timezone,:status,
-                           :usta_code,:website,:aliases,:notes)
+                           :usta_code,:website,:youtube,:livestream,:aliases,:notes)
                    ON CONFLICT(code) DO UPDATE SET
                      name=excluded.name, city=excluded.city, state=excluded.state,
                      track_type=excluded.track_type, breeds=excluded.breeds, timezone=excluded.timezone,
                      status=excluded.status, usta_code=excluded.usta_code, website=excluded.website,
+                     youtube=excluded.youtube, livestream=excluded.livestream,
                      aliases=excluded.aliases, notes=excluded.notes, updated_at=datetime('now')
                    WHERE tracks.name IS NOT excluded.name OR tracks.status IS NOT excluded.status
                       OR tracks.notes IS NOT excluded.notes OR tracks.aliases IS NOT excluded.aliases
                       OR tracks.track_type IS NOT excluded.track_type OR tracks.breeds IS NOT excluded.breeds
                       OR tracks.website IS NOT excluded.website OR tracks.usta_code IS NOT excluded.usta_code
+                      OR tracks.youtube IS NOT excluded.youtube OR tracks.livestream IS NOT excluded.livestream
                       OR tracks.city IS NOT excluded.city OR tracks.timezone IS NOT excluded.timezone""",
                 {k: (t.get(k) or None) for k in ("code", "name", "city", "state", "track_type", "breeds",
-                                                  "timezone", "status", "usta_code", "website",
-                                                  "aliases", "notes")} | {"status": t.get("status") or "active"})
+                                                  "timezone", "status", "usta_code", "website", "youtube",
+                                                  "aliases", "notes")}
+                | {"status": t.get("status") or "active",
+                   "livestream": 1 if (t.get("livestream") or "").lower() in ("yes", "1", "true") else 0})
             stats.bump("tracks_upserted", cur.rowcount)
 
         ids = track_ids_by_code(conn)

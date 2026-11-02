@@ -252,6 +252,7 @@ function showLogin(error = '') {
 function showApp() {
   showScreen('#app');
   renderAll();
+  loadPostTimes(true);
 }
 
 function initFirebase() {
@@ -422,36 +423,100 @@ function zonedTime(date, time, tz) {
   return new Date(guess - (Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute) - guess));
 }
 
+/* ----- First-post times from an Apify scraper (optional; see APIFY_SETUP.md) ----- */
+
+let postFeed = { url: '', at: 0, rows: [], error: '' };  // rows: { date, code, name, race, time }
+
+// Names differ between sources ("Santa Anita Park" vs "Santa Anita"), so compare without the generic words
+const normName = s => String(s || '').toLowerCase()
+  .replace(/race ?course|race ?track|raceway|racing|casino|park|downs|the\b|[^a-z]/g, '');
+
+// "4:47 PM" or "16:47" → "16:47"
+function to24h(s) {
+  const m = String(s || '').trim().match(/^(\d{1,2}):(\d{2})\s*([ap])?/i);
+  if (!m) return null;
+  let h = +m[1];
+  const ap = (m[3] || '').toLowerCase();
+  if (ap === 'p' && h < 12) h += 12;
+  if (ap === 'a' && h === 12) h = 0;
+  return String(h).padStart(2, '0') + ':' + m[2];
+}
+
+// Re-fetches at most every 30 minutes unless forced (e.g. after saving Settings)
+async function loadPostTimes(force = false) {
+  const url = (state.settings.postTimesUrl || '').trim();
+  if (!url) { postFeed = { url: '', at: 0, rows: [], error: '' }; return renderToday(); }
+  if (!force && postFeed.url === url && Date.now() - postFeed.at < 30 * 60000) return;
+  let rows = [], error = '';
+  try {
+    const res = await fetch(url, { cache: 'no-store' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    // Both popular Equibase scrapers are supported: camelCase or snake_case fields
+    rows = (Array.isArray(data) ? data : []).map(r => ({
+      date: r.raceDate || r.race_date,
+      code: String(r.trackCode || r.track_code || '').toUpperCase(),
+      name: normName(r.trackName || r.track_name),
+      race: num(r.raceNumber ?? r.race_number) || 99,
+      time: to24h(r.postTime || r.post_time),
+    })).filter(r => r.date && r.time);
+  } catch (err) {
+    console.error('First-post feed:', err);
+    error = err.message;
+  }
+  postFeed = { url, at: Date.now(), rows, error };
+  renderToday();
+}
+
+// The earliest race the feed lists for this track and day, matched by name ("Finger Lakes" fits
+// "Finger Lakes Gaming & Racetrack") or else by track code
+function firstPost(d) {
+  if (d.first_post_local) return d.first_post_local;
+  const name = normName(d.track_name);
+  const sameName = r => r.name.length >= 4 && (name.includes(r.name) || r.name.includes(name));
+  const day = postFeed.rows.filter(r => r.date === d.race_date);
+  const hits = day.filter(sameName).length ? day.filter(sameName) : day.filter(r => r.code === d.track_code);
+  return hits.length ? hits.reduce((a, b) => (b.race < a.race ? b : a)).time : null;
+}
+
 function renderToday() {
   const t = today();
-  const active = new Set(activeTracks().map(x => x.code));
+  const tracks = new Map(activeTracks().map(x => [x.code, x]));
   // One entry per track: its earliest card today (a mixed track can run two breeds)
   const byTrack = new Map();
   CAL.race_days.forEach(d => {
-    if (d.race_date !== t || d.status === 'cancelled' || !active.has(d.track_code)) return;
+    if (d.race_date !== t || d.status === 'cancelled' || !tracks.has(d.track_code)) return;
     const cur = byTrack.get(d.track_code);
     if (!cur || (d.first_post_local && (!cur.first_post_local || d.first_post_local < cur.first_post_local))) byTrack.set(d.track_code, d);
   });
   const now = Date.now();
   const tz = TZ_CHOICES.some(([k]) => k === state.todayTz) ? state.todayTz : 'local';
   const races = [...byTrack.values()].map(d => {
-    const post = d.first_post_local ? zonedTime(t, d.first_post_local, d.timezone) : null;
-    return { ...d, post, live: post && now >= post && now < post.getTime() + CARD_HOURS * 3600000 };
+    const fp = firstPost(d);
+    const post = fp ? zonedTime(t, fp, d.timezone) : null;
+    return { ...d, post, stream: !!tracks.get(d.track_code).livestream, live: post && now >= post && now < post.getTime() + CARD_HOURS * 3600000 };
   }).sort((a, b) => (b.live - a.live) || ((a.post || Infinity) - (b.post || Infinity)) || a.track_name.localeCompare(b.track_name));
   const anyTimes = races.some(r => r.post);
 
+  // "9:00am PST"
   const time = r => r.live ? '<span class="badge live">LIVE</span>'
     : r.post ? r.post.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZoneName: 'short', ...(tz === 'local' ? {} : { timeZone: tz }) })
+      .replace(/ (AM|PM)/, (_, ap) => ap.toLowerCase())
     : '<span class="muted">Time TBA</span>';
 
   $('#todayCard').innerHTML = `
     <div class="card-head">
       <h3>Racing today <span class="muted small-text">${parseDate(t).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}</span></h3>
-      ${anyTimes ? `<select id="todayTz" class="tz-select" aria-label="Time zone">${TZ_CHOICES.map(([k, label]) =>
-        `<option value="${k}" ${k === tz ? 'selected' : ''}>${label}</option>`).join('')}</select>` : ''}
+      <div class="head-actions">
+        <span class="stream-key"><span><i class="key stream"></i>Live on YouTube</span><span><i class="key"></i>No stream</span></span>
+        ${anyTimes ? `<select id="todayTz" class="tz-select" aria-label="Time zone">${TZ_CHOICES.map(([k, label]) =>
+          `<option value="${k}" ${k === tz ? 'selected' : ''}>${label}</option>`).join('')}</select>` : ''}
+      </div>
     </div>
+    ${postFeed.error ? `<p class="small-text loss">Couldn't load first-race times (${esc(postFeed.error)}). Check the Apify link in Settings.</p>` : ''}
     <div class="today-list">${races.map(r => `
-      <button type="button" class="today-item" data-code="${esc(r.track_code)}" title="Open in Calendar">
+      <button type="button" class="today-item ${r.stream ? 'stream' : ''}" data-code="${esc(r.track_code)}"
+        title="${r.stream ? 'Live-streams races on YouTube. ' : ''}Open in Calendar">
         <span><span class="name">${esc(r.track_name)}</span><span class="muted tiny"> ${esc(r.state)} · ${esc(r.breed)}</span></span>
         <span class="time">${time(r)}</span>
       </button>`).join('') || '<p class="muted small-text">No racing at active tracks today.</p>'}</div>`;
@@ -473,8 +538,8 @@ $('#todayCard').addEventListener('click', e => {
   renderCalendarTab();
 });
 
-// Keep LIVE badges and the date current while the page stays open
-setInterval(() => { if (state.user) renderToday(); }, 60000);
+// Keep LIVE badges, the date and first-race times current while the page stays open
+setInterval(() => { if (state.user) { renderToday(); loadPostTimes(); } }, 60000);
 
 function renderTracker() {
   renderWinRate();
@@ -735,7 +800,8 @@ function renderCalendarTab() {
       <div>
         <h3>${esc(track.name)}</h3>
         <p class="muted small-text">${esc([track.city, track.state].filter(Boolean).join(', '))} · ${esc(track.track_type)} · ${esc(track.breeds.split(',').join(', '))}
-          ${track.website ? ` · <a href="${esc(track.website)}" target="_blank" rel="noopener">Website ↗</a>` : ''}</p>
+          ${track.website ? ` · <a href="${esc(track.website)}" target="_blank" rel="noopener">Website ↗</a>` : ''}
+          ${track.youtube ? ` · <a href="${esc(track.youtube)}" target="_blank" rel="noopener">YouTube${track.livestream ? ' (live)' : ''} ↗</a>` : ''}</p>
         ${note ? `<p class="small-text">${note}</p>` : ''}
       </div>
       <div class="track-facts">
@@ -1039,8 +1105,10 @@ $('#settingsForm').addEventListener('submit', e => {
     ...state.settings,
     startingBankroll: num(f.startingBankroll.value),
     roundTo: num(f.roundTo.value),
+    postTimesUrl: f.postTimesUrl.value.trim(),
   };
   save(); renderAll();
+  loadPostTimes(true);
   toast('Settings saved');
 });
 
