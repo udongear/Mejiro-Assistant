@@ -336,6 +336,7 @@ function renderAll() {
   renderUser();
   renderTrackSelects();
   renderTracker();
+  renderRaces();
   renderStrategies();
   renderCalendarTab();
   renderMatrix();
@@ -438,7 +439,7 @@ function renderToday() {
   const tz = TZ_CHOICES.some(([k]) => k === state.todayTz) ? state.todayTz : 'local';
   const races = [...byTrack.values()].map(d => {
     const post = d.first_post_local ? zonedTime(t, d.first_post_local, d.timezone) : null;
-    return { ...d, post, stream: !!tracks.get(d.track_code).livestream, live: post && now >= post && now < post.getTime() + CARD_HOURS * 3600000 };
+    return { ...d, post, youtube: tracks.get(d.track_code).youtube, live: post && now >= post && now < post.getTime() + CARD_HOURS * 3600000 };
   }).sort((a, b) => (b.live - a.live) || ((a.post || Infinity) - (b.post || Infinity)) || a.track_name.localeCompare(b.track_name));
   const anyTimes = races.some(r => r.post);
 
@@ -451,18 +452,25 @@ function renderToday() {
   $('#todayCard').innerHTML = `
     <div class="card-head">
       <h3>Racing today <span class="muted small-text">${parseDate(t).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}</span></h3>
-      <div class="head-actions">
-        <span class="stream-key"><span><i class="key stream"></i>Live on YouTube</span><span><i class="key"></i>No stream</span></span>
-        ${anyTimes ? `<select id="todayTz" class="tz-select" aria-label="Time zone">${TZ_CHOICES.map(([k, label]) =>
-          `<option value="${k}" ${k === tz ? 'selected' : ''}>${label}</option>`).join('')}</select>` : ''}
-      </div>
+      ${anyTimes ? `<select id="todayTz" class="tz-select" aria-label="Time zone">${TZ_CHOICES.map(([k, label]) =>
+        `<option value="${k}" ${k === tz ? 'selected' : ''}>${label}</option>`).join('')}</select>` : ''}
     </div>
     <div class="today-list">${races.map(r => `
-      <button type="button" class="today-item ${r.stream ? 'stream' : ''}" data-code="${esc(r.track_code)}"
-        title="${r.stream ? 'Live-streams races on YouTube. ' : ''}Open in Calendar">
-        <span><span class="name">${esc(r.track_name)}</span><span class="muted tiny"> ${esc(r.state)} · ${esc(r.breed)}</span></span>
-        <span class="time">${time(r)}</span>
-      </button>`).join('') || '<p class="muted small-text">No racing at active tracks today.</p>'}</div>`;
+      <div class="today-item">
+        <button type="button" class="today-open" data-code="${esc(r.track_code)}" title="Open in Calendar">
+          <span><span class="name">${esc(r.track_name)}</span><span class="muted tiny"> ${esc(r.state)} · ${esc(r.breed)}</span></span>
+          <span class="time">${time(r)}</span>
+        </button>
+        ${youtubeIcon(r.youtube)}
+      </div>`).join('') || '<p class="muted small-text">No racing at active tracks today.</p>'}</div>`;
+}
+
+// Links to the track's channel once tracks.csv has its "youtube" column filled in; greyed out until then
+const YT_SVG = '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><rect x="1" y="4" width="22" height="16" rx="5" fill="currentColor"/><path d="M10 8.5v7l6-3.5z" fill="#fff"/></svg>';
+function youtubeIcon(url) {
+  return url
+    ? `<a class="yt-link" href="${esc(url)}" target="_blank" rel="noopener" title="YouTube channel" aria-label="YouTube channel">${YT_SVG}</a>`
+    : `<span class="yt-link off" title="No YouTube channel added yet">${YT_SVG}</span>`;
 }
 
 $('#todayCard').addEventListener('change', e => {
@@ -482,7 +490,7 @@ $('#todayCard').addEventListener('click', e => {
 });
 
 // Keep LIVE badges and the date current while the page stays open
-setInterval(() => { if (state.user) renderToday(); }, 60000);
+setInterval(() => { if (state.user) { renderToday(); if (racesView.date !== today()) renderRaces(); } }, 60000);
 
 function renderTracker() {
   renderWinRate();
@@ -619,6 +627,116 @@ function settleBet(bet, status, payout) {
   const p = profitOf(bet);
   toast(status === 'scratched' ? 'Marked as scratched (stake returned)' : `Settled: ${money(p, true)}`);
 }
+
+/* =========================================================
+   Today's Races — pick a track, then a race: entrants in the middle,
+   win/place/show percentages on the right
+   ========================================================= */
+
+const RACE_COUNT = 12;
+let racesView = { date: null, code: null, race: 1 };
+
+// Active tracks with a race day today, A–Z
+function todaysTracks() {
+  const t = today();
+  const active = new Set(activeTracks().map(x => x.code));
+  const codes = new Set(CAL.race_days
+    .filter(d => d.race_date === t && d.status !== 'cancelled' && active.has(d.track_code))
+    .map(d => d.track_code));
+  return CAL.tracks.filter(x => codes.has(x.code)).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+// Entrants for one race: { pp, horse, starts, wins, places, shows }, where wins/places/shows count
+// 1st/2nd/3rd-place finishes. Real race cards will come from window.MEJIRO_RACECARDS["CODE|YYYY-MM-DD"][race];
+// until that exists, every race gets a placeholder field (the same one each time it's opened).
+function raceEntrants(code, date, race) {
+  const real = window.MEJIRO_RACECARDS?.[`${code}|${date}`]?.[race];
+  if (real) return { entrants: real, placeholder: false };
+  let seed = [...`${code}${date}${race}`].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
+  const rand = n => { seed = (seed * 1103515245 + 12345) >>> 0; return (seed >>> 8) % n; };
+  const entrants = Array.from({ length: 6 + rand(5) }, (_, i) => {
+    const starts = rand(5) ? 1 + rand(40) : 0;
+    const wins = starts ? rand(Math.ceil(starts * 0.35) + 1) : 0;
+    const places = starts ? Math.min(starts - wins, rand(Math.ceil(starts * 0.25) + 1)) : 0;
+    const shows = starts ? Math.min(starts - wins - places, rand(Math.ceil(starts * 0.2) + 1)) : 0;
+    return { pp: i + 1, horse: `Entrant ${i + 1}`, starts, wins, places, shows };
+  });
+  return { entrants, placeholder: true };
+}
+
+// WIN = 1st ÷ starts, PLACE = (1st + 2nd) ÷ starts, SHOW = (1st + 2nd + 3rd) ÷ starts
+function wpsPercents(e) {
+  if (!e.starts) return null;
+  const pct = n => n / e.starts * 100;
+  return { win: pct(e.wins), place: pct(e.wins + e.places), show: pct(e.wins + e.places + e.shows) };
+}
+const fmtPct = v => +v.toFixed(1) + '%';
+const lifeLine = e => `${e.starts}-${e.wins}-${e.places}-${e.shows}`;
+
+function renderRaces() {
+  const t = today();
+  const tracks = todaysTracks();
+  if (racesView.date !== t || !tracks.some(x => x.code === racesView.code)) {
+    racesView = { date: t, code: tracks[0]?.code || null, race: 1 };
+  }
+  $('#racesDate').textContent = parseDate(t).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+  $('#racesTracks').innerHTML = tracks.map(x => `
+    <button type="button" class="race-track ${x.code === racesView.code ? 'active' : ''}" data-code="${esc(x.code)}">
+      <span class="name">${esc(x.name)}</span><span class="muted tiny">${esc(x.state)}</span>
+    </button>`).join('') || '<p class="muted small-text">No racing at active tracks today.</p>';
+
+  const track = tracks.find(x => x.code === racesView.code);
+  if (!track) {
+    $('#racesTitle').textContent = 'Entrants';
+    $('#racePicker').innerHTML = '';
+    $('#racesEntrants').innerHTML = $('#racesCalc').innerHTML = '<p class="muted small-text">Nothing to show today.</p>';
+    return;
+  }
+
+  $('#racesTitle').textContent = `${track.name} · Race ${racesView.race}`;
+  $('#racePicker').innerHTML = Array.from({ length: RACE_COUNT }, (_, i) => i + 1).map(n =>
+    `<button type="button" class="seg ${n === racesView.race ? 'active' : ''}" data-race="${n}">${n}</button>`).join('');
+
+  const { entrants, placeholder } = raceEntrants(track.code, t, racesView.race);
+  const note = placeholder ? '<p class="placeholder-note">Placeholder entrants. Race cards aren\'t connected yet.</p>' : '';
+  $('#racesEntrants').innerHTML = `${note}
+    <div class="table-wrap"><table class="table">
+      <thead><tr><th>PP</th><th>Horse</th><th class="num" title="Starts-1st-2nd-3rd">Life</th></tr></thead>
+      <tbody>${entrants.map(e => `
+        <tr><td>${esc(e.pp)}</td><td>${esc(e.horse)}</td>
+          <td class="num">${e.starts ? lifeLine(e) : '<span class="muted">Debut</span>'}</td></tr>`).join('')}</tbody>
+    </table></div>`;
+
+  // Highlight the best figure in each column
+  const all = entrants.map(e => ({ e, p: wpsPercents(e) }));
+  const best = k => Math.max(...all.filter(x => x.p).map(x => x.p[k]));
+  const top = { win: best('win'), place: best('place'), show: best('show') };
+  const cell = (p, k) => p ? `<span class="${p[k] === top[k] ? 'top' : ''}">${fmtPct(p[k])}</span>` : '<span class="muted">—</span>';
+  $('#racesCalc').innerHTML = `${note}
+    <div class="calc-list">${all.map(({ e, p }) => `
+      <div class="calc-item">
+        <div class="calc-head"><span><span class="muted">#${esc(e.pp)}</span> <b>${esc(e.horse)}</b></span>
+          <span class="muted tiny">${e.starts ? lifeLine(e) : 'Debut, no record'}</span></div>
+        <div class="calc-row"><span>WIN %</span>${cell(p, 'win')}</div>
+        <div class="calc-row"><span>PLACE %</span>${cell(p, 'place')}</div>
+        <div class="calc-row"><span>SHOW %</span>${cell(p, 'show')}</div>
+      </div>`).join('')}</div>`;
+}
+
+$('#racesTracks').addEventListener('click', e => {
+  const b = e.target.closest('[data-code]');
+  if (!b) return;
+  racesView.code = b.dataset.code;
+  racesView.race = 1;
+  renderRaces();
+});
+
+$('#racePicker').addEventListener('click', e => {
+  const b = e.target.closest('[data-race]');
+  if (!b) return;
+  racesView.race = +b.dataset.race;
+  renderRaces();
+});
 
 /* =========================================================
    Strategies — short notes, reordered by dragging the ☰ handle

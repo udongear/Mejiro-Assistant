@@ -44,6 +44,7 @@
       </div>
       <nav class="nav" id="nav">
         <button data-tab="tracker" class="active">Tracker</button>
+        <button data-tab="races">Today's Races</button>
         <button data-tab="strategies">Strategies</button>
         <button data-tab="calendar">Calendar</button>
         <button data-tab="matrix">Risk Matrix</button>
@@ -88,6 +89,29 @@
               <button class="btn primary" type="submit" id="logBetsBtn">Log bet</button>
             </div>
           </form>
+        </div>
+      </section>
+
+      <!-- ---------- TODAY'S RACES ---------- -->
+      <section id="tab-races" class="tab">
+        <header class="tab-head">
+          <h2>Today's Races</h2>
+          <span class="muted small-text" id="racesDate"></span>
+        </header>
+        <div class="races-layout">
+          <div class="card races-col">
+            <h3>Tracks</h3>
+            <div class="races-tracks" id="racesTracks"></div>
+          </div>
+          <div class="card races-col">
+            <h3 id="racesTitle">Entrants</h3>
+            <div class="race-picker" id="racePicker"></div>
+            <div id="racesEntrants"></div>
+          </div>
+          <div class="card races-col">
+            <h3>Win / Place / Show %</h3>
+            <div id="racesCalc"></div>
+          </div>
         </div>
       </section>
 

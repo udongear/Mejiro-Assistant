@@ -180,21 +180,47 @@ input[type="date"] { color-scheme: dark; }
 .tz-select { width: auto; padding: 6px 10px; font-size: 13px; }
 .today-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; margin-top: 8px; }
 .today-item {
-  display: flex; justify-content: space-between; align-items: center; gap: 10px; text-align: left;
-  padding: 10px 12px; border: 1px solid transparent; border-radius: 10px; background: var(--surface-2);
-  color: var(--text); font: 13px var(--font); cursor: pointer;
+  display: flex; align-items: center; gap: 4px; padding-right: 8px;
+  border: 1px solid transparent; border-radius: 10px; background: var(--surface-2);
 }
 .today-item:hover { border-color: var(--lavender); }
-/* Purple = live-streams on YouTube; grey (default) = no stream */
-.today-item.stream { background: rgba(123, 97, 255, .2); border-color: rgba(123, 97, 255, .6); }
-.today-item:not(.stream) { color: var(--muted); }
-.stream-key { display: inline-flex; gap: 12px; font-size: 12px; color: var(--muted); }
-.stream-key span { display: inline-flex; align-items: center; gap: 6px; }
-.stream-key .key { width: 10px; height: 10px; border-radius: 3px; background: var(--surface-2); border: 1px solid var(--border); }
-.stream-key .key.stream { background: rgba(123, 97, 255, .5); border-color: var(--violet); }
+.today-open {
+  flex: 1; min-width: 0; display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  padding: 10px 4px 10px 12px; border: 0; background: none; color: var(--text); font: 13px var(--font);
+  text-align: left; cursor: pointer;
+}
 .today-item .name { font-weight: 600; }
+.yt-link { flex-shrink: 0; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; color: #FF0033; }
+a.yt-link:hover { background: var(--surface); }
+.yt-link.off { color: var(--muted); opacity: .35; cursor: default; }
 .today-item .time { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .badge.live { background: var(--loss); color: #fff; animation: pulse 1.6s ease-in-out infinite; }
+
+/* Today's Races: tracks | entrants | percentages */
+.races-layout { display: grid; grid-template-columns: minmax(200px, 240px) minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.races-layout > .card { margin-bottom: 0; }
+.races-tracks { display: flex; flex-direction: column; gap: 4px; }
+.race-track {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 8px; width: 100%;
+  padding: 9px 10px; border: 1px solid transparent; border-radius: 8px; background: none;
+  color: var(--text); font: 13px var(--font); text-align: left; cursor: pointer;
+}
+.race-track:hover { background: var(--surface-2); }
+.race-track.active { background: rgba(123, 97, 255, .2); border-color: var(--violet); }
+.race-track .name { font-weight: 600; }
+.race-picker { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 12px; }
+.race-picker .seg { min-width: 34px; padding: 6px 8px; background: var(--surface-2); }
+.race-picker .seg.active { background: var(--lavender); }
+.placeholder-note { margin: 0 0 10px; padding: 8px 10px; border-radius: 8px; border: 1px dashed var(--border); color: var(--muted); font-size: 12px; }
+.calc-list { display: flex; flex-direction: column; gap: 8px; }
+.calc-item { padding: 10px 12px; border-radius: 10px; background: var(--surface-2); }
+.calc-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+.calc-row { display: flex; justify-content: space-between; font-size: 13px; padding: 2px 0; font-variant-numeric: tabular-nums; }
+.calc-row span:first-child { color: var(--muted); letter-spacing: .04em; }
+.calc-row .top { color: var(--lavender); font-weight: 700; }
+@media (max-width: 1100px) {
+  .races-layout { grid-template-columns: 1fr; }
+}
 
 /* Strategies */
 .strategy-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
