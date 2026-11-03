@@ -221,6 +221,9 @@ a.yt-link:hover { background: var(--surface); }
 .calc-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 6px; }
 .calc-row { display: flex; justify-content: space-between; font-size: 13px; padding: 2px 0; font-variant-numeric: tabular-nums; }
 .calc-row span:first-child { color: var(--muted); letter-spacing: .04em; }
+/* Scratched horses stay listed, greyed out */
+.badge.scr { background: var(--surface); color: var(--muted); border: 1px solid var(--border); }
+.table tr.scratched td, .calc-item.scratched b { color: var(--muted); }
 /* Green = highest in the race for that rate; yellow = above 50% */
 .calc-row .best { color: var(--profit); font-weight: 700; }
 .calc-row .strong { color: #FFD84D; font-weight: 600; }

@@ -647,8 +647,8 @@ function todaysTracks() {
   return CAL.tracks.filter(x => codes.has(x.code)).sort((a, b) => a.name.localeCompare(b.name));
 }
 
-// Entrants for one race: { pp, horse, starts, wins, places, shows }, where wins/places/shows count
-// 1st/2nd/3rd-place finishes. Real race cards will come from window.MEJIRO_RACECARDS["CODE|YYYY-MM-DD"][race];
+// Entrants for one race: { pp, horse, starts, wins, places, shows, scratched }, where wins/places/shows
+// count 1st/2nd/3rd-place finishes and scratched is true for horses pulled from the race. Real race cards will come from window.MEJIRO_RACECARDS["CODE|YYYY-MM-DD"][race];
 // until that exists, every race gets a placeholder field (the same one each time it's opened).
 const seededRandom = key => {
   let seed = [...key].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
@@ -671,7 +671,7 @@ function raceEntrants(code, date, race) {
     const wins = starts ? rand(Math.ceil(starts * 0.35) + 1) : 0;
     const places = starts ? Math.min(starts - wins, rand(Math.ceil(starts * 0.25) + 1)) : 0;
     const shows = starts ? Math.min(starts - wins - places, rand(Math.ceil(starts * 0.2) + 1)) : 0;
-    return { pp: i + 1, horse: `Entrant ${i + 1}`, starts, wins, places, shows };
+    return { pp: i + 1, horse: `Entrant ${i + 1}`, starts, wins, places, shows, scratched: !rand(9) };
   });
   return { entrants, placeholder: true };
 }
@@ -719,15 +719,18 @@ function renderRaces() {
     <div class="table-wrap"><table class="table">
       <thead><tr><th>PP</th><th>Horse</th><th class="num" title="Starts-1st-2nd-3rd">Life</th></tr></thead>
       <tbody>${entrants.map(e => `
-        <tr><td>${esc(e.pp)}</td><td>${esc(e.horse)}</td>
+        <tr class="${e.scratched ? 'scratched' : ''}"><td>${esc(e.pp)}</td>
+          <td>${esc(e.horse)}${e.scratched ? ' <span class="badge scr">SCR</span>' : ''}</td>
           <td class="num">${e.starts ? lifeLine(e) : '<span class="muted">Debut</span>'}</td></tr>`).join('')}</tbody>
     </table></div>`;
 
-  // Green = the race's highest rate of that type; yellow = above 50%
+  // Green = the race's highest rate of that type; yellow = above 50%.
+  // Scratched horses keep their numbers, in grey, and don't count toward the highest.
   const all = entrants.map(e => ({ e, p: wpsPercents(e) }));
-  const best = k => Math.max(...all.filter(x => x.p).map(x => x.p[k]));
+  const best = k => Math.max(...all.filter(x => x.p && !x.e.scratched).map(x => x.p[k]));
   const top = { win: best('win'), place: best('place'), show: best('show') };
-  const cell = (p, k) => !p ? '<span class="muted">—</span>'
+  const cell = (e, p, k) => !p ? '<span class="muted">—</span>'
+    : e.scratched ? `<span class="muted">${fmtPct(p[k])}</span>`
     : `<span class="${p[k] === top[k] ? 'best' : p[k] > 50 ? 'strong' : ''}">${fmtPct(p[k])}</span>`;
   const shown = wpsShown();
   $('#racesCalc').innerHTML = `
@@ -735,11 +738,11 @@ function renderRaces() {
       `<button type="button" class="seg ${shown.includes(k) ? 'active' : ''}" data-wps="${k}" aria-pressed="${shown.includes(k)}">${label}</button>`).join('')}</div>
     ${note}
     <div class="calc-list">${all.map(({ e, p }) => `
-      <div class="calc-item">
-        <div class="calc-head"><span><span class="muted">#${esc(e.pp)}</span> <b>${esc(e.horse)}</b></span>
+      <div class="calc-item ${e.scratched ? 'scratched' : ''}">
+        <div class="calc-head"><span><span class="muted">#${esc(e.pp)}</span> <b>${esc(e.horse)}</b>${e.scratched ? ' <span class="badge scr">SCR</span>' : ''}</span>
           <span class="muted tiny">${e.starts ? lifeLine(e) : 'Debut, no record'}</span></div>
         ${WPS.filter(([k]) => shown.includes(k)).map(([k, label]) =>
-          `<div class="calc-row"><span>${label} %</span>${cell(p, k)}</div>`).join('')}
+          `<div class="calc-row"><span>${label} %</span>${cell(e, p, k)}</div>`).join('')}
       </div>`).join('')}</div>`;
 }
 
