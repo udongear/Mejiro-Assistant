@@ -176,26 +176,6 @@ input[type="date"] { color-scheme: dark; }
 .seg:hover { color: var(--text); }
 .seg.active { background: var(--lavender); color: var(--black); }
 
-/* Tracker: racing today */
-.tz-select { width: auto; padding: 6px 10px; font-size: 13px; }
-.today-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; margin-top: 8px; }
-.today-item {
-  display: flex; align-items: center; gap: 4px; padding-right: 8px;
-  border: 1px solid transparent; border-radius: 10px; background: var(--surface-2);
-}
-.today-item:hover { border-color: var(--lavender); }
-.today-open {
-  flex: 1; min-width: 0; display: flex; justify-content: space-between; align-items: center; gap: 10px;
-  padding: 10px 4px 10px 12px; border: 0; background: none; color: var(--text); font: 13px var(--font);
-  text-align: left; cursor: pointer;
-}
-.today-item .name { font-weight: 600; }
-.yt-link { flex-shrink: 0; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; color: #FF0033; }
-a.yt-link:hover { background: var(--surface); }
-.yt-link.off { color: var(--muted); opacity: .35; cursor: default; }
-.today-item .time { white-space: nowrap; font-variant-numeric: tabular-nums; }
-.badge.live { background: var(--loss); color: #fff; animation: pulse 1.6s ease-in-out infinite; }
-
 /* Today's Races: tracks | entrants | percentages */
 .races-layout { display: grid; grid-template-columns: minmax(200px, 240px) minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
 .races-layout > .card { margin-bottom: 0; }

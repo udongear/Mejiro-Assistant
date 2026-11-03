@@ -52,7 +52,7 @@ function readLocalState() {
    users/{uid}/bets/{betId}  one document per bet
    save() is called after every change; it writes only what differs from the last sync. */
 
-const PREF_KEYS = ['settings', 'matrix', 'calTrack', 'calHideInactive', 'calHideNoDays', 'wrRange', 'todayTz', 'strategies', 'wpsShown'];
+const PREF_KEYS = ['settings', 'matrix', 'calTrack', 'calHideInactive', 'calHideNoDays', 'wrRange', 'strategies', 'wpsShown'];
 
 let fb = null;  // { auth, db } once Firebase is set up
 let synced = { prefs: '', bets: new Map() };  // last known Firestore copy (bet id → JSON)
@@ -406,95 +406,11 @@ $('#winRate').addEventListener('click', e => {
   renderWinRate();
 });
 
-/* ----- Racing today (from the Calendar data) ----- */
-
-const TZ_CHOICES = [['local', 'My time'], ['America/New_York', 'Eastern'], ['America/Chicago', 'Central'],
-  ['America/Denver', 'Mountain'], ['America/Phoenix', 'Arizona'], ['America/Los_Angeles', 'Pacific']];
-const CARD_HOURS = 5;  // a card usually runs about this long after first post; "LIVE" until then
-
-// A date + wall-clock time at the track, as an absolute moment (handles daylight saving)
-const tzFormatters = {};
-function zonedTime(date, time, tz) {
-  const [y, m, d] = date.split('-').map(Number), [hh, mm] = time.split(':').map(Number);
-  if (!tz) return new Date(y, m - 1, d, hh, mm);
-  const guess = Date.UTC(y, m - 1, d, hh, mm);
-  const fmt = tzFormatters[tz] || (tzFormatters[tz] = new Intl.DateTimeFormat('en-US', {
-    timeZone: tz, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric',
-  }));
-  const p = Object.fromEntries(fmt.formatToParts(new Date(guess)).map(x => [x.type, +x.value]));
-  return new Date(guess - (Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute) - guess));
-}
-
-function renderToday() {
-  const t = today();
-  const tracks = new Map(activeTracks().map(x => [x.code, x]));
-  // One entry per track: its earliest card today (a mixed track can run two breeds)
-  const byTrack = new Map();
-  CAL.race_days.forEach(d => {
-    if (d.race_date !== t || d.status === 'cancelled' || !tracks.has(d.track_code)) return;
-    const cur = byTrack.get(d.track_code);
-    if (!cur || (d.first_post_local && (!cur.first_post_local || d.first_post_local < cur.first_post_local))) byTrack.set(d.track_code, d);
-  });
-  const now = Date.now();
-  const tz = TZ_CHOICES.some(([k]) => k === state.todayTz) ? state.todayTz : 'local';
-  const races = [...byTrack.values()].map(d => {
-    const post = d.first_post_local ? zonedTime(t, d.first_post_local, d.timezone) : null;
-    return { ...d, post, youtube: tracks.get(d.track_code).youtube, live: post && now >= post && now < post.getTime() + CARD_HOURS * 3600000 };
-  }).sort((a, b) => (b.live - a.live) || ((a.post || Infinity) - (b.post || Infinity)) || a.track_name.localeCompare(b.track_name));
-  const anyTimes = races.some(r => r.post);
-
-  // "9:00am PST"
-  const time = r => r.live ? '<span class="badge live">LIVE</span>'
-    : r.post ? r.post.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZoneName: 'short', ...(tz === 'local' ? {} : { timeZone: tz }) })
-      .replace(/ (AM|PM)/, (_, ap) => ap.toLowerCase())
-    : '<span class="muted">Time TBA</span>';
-
-  $('#todayCard').innerHTML = `
-    <div class="card-head">
-      <h3>Racing today <span class="muted small-text">${parseDate(t).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}</span></h3>
-      ${anyTimes ? `<select id="todayTz" class="tz-select" aria-label="Time zone">${TZ_CHOICES.map(([k, label]) =>
-        `<option value="${k}" ${k === tz ? 'selected' : ''}>${label}</option>`).join('')}</select>` : ''}
-    </div>
-    <div class="today-list">${races.map(r => `
-      <div class="today-item">
-        <button type="button" class="today-open" data-code="${esc(r.track_code)}" title="Open in Calendar">
-          <span><span class="name">${esc(r.track_name)}</span><span class="muted tiny"> ${esc(r.state)} · ${esc(r.breed)}</span></span>
-          <span class="time">${time(r)}</span>
-        </button>
-        ${youtubeIcon(r.youtube)}
-      </div>`).join('') || '<p class="muted small-text">No racing at active tracks today.</p>'}</div>`;
-}
-
-// Links to the track's channel once tracks.csv has its "youtube" column filled in; greyed out until then
-const YT_SVG = '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><rect x="1" y="4" width="22" height="16" rx="5" fill="currentColor"/><path d="M10 8.5v7l6-3.5z" fill="#fff"/></svg>';
-function youtubeIcon(url) {
-  return url
-    ? `<a class="yt-link" href="${esc(url)}" target="_blank" rel="noopener" title="YouTube channel" aria-label="YouTube channel">${YT_SVG}</a>`
-    : `<span class="yt-link off" title="No YouTube channel added yet">${YT_SVG}</span>`;
-}
-
-$('#todayCard').addEventListener('change', e => {
-  if (e.target.id !== 'todayTz') return;
-  state.todayTz = e.target.value;
-  save();
-  renderToday();
-});
-
-$('#todayCard').addEventListener('click', e => {
-  const item = e.target.closest('[data-code]');
-  if (!item) return;
-  state.calTrack = item.dataset.code;
-  save();
-  goTab('calendar');
-  renderCalendarTab();
-});
-
-// Keep LIVE badges and the date current while the page stays open
-setInterval(() => { if (state.user) { renderToday(); if (racesView.date !== today()) renderRaces(); } }, 60000);
+// Roll Today's Races over to the new day if the page stays open past midnight
+setInterval(() => { if (state.user && racesView.date !== today()) renderRaces(); }, 60000);
 
 function renderTracker() {
   renderWinRate();
-  renderToday();
   const br = bankroll();
   const tier = currentTier(br);
   $('#stats').innerHTML = `
