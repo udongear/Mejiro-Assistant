@@ -52,7 +52,7 @@ function readLocalState() {
    users/{uid}/bets/{betId}  one document per bet
    save() is called after every change; it writes only what differs from the last sync. */
 
-const PREF_KEYS = ['settings', 'matrix', 'calTrack', 'calHideInactive', 'calHideNoDays', 'wrRange', 'todayTz', 'strategies'];
+const PREF_KEYS = ['settings', 'matrix', 'calTrack', 'calHideInactive', 'calHideNoDays', 'wrRange', 'todayTz', 'strategies', 'wpsShown'];
 
 let fb = null;  // { auth, db } once Firebase is set up
 let synced = { prefs: '', bets: new Map() };  // last known Firestore copy (bet id → JSON)
@@ -633,7 +633,8 @@ function settleBet(bet, status, payout) {
    win/place/show percentages on the right
    ========================================================= */
 
-const RACE_COUNT = 12;
+const MAX_RACES = 15;
+const WPS = [['win', 'WIN'], ['place', 'PLACE'], ['show', 'SHOW']];
 let racesView = { date: null, code: null, race: 1 };
 
 // Active tracks with a race day today, A–Z
@@ -649,11 +650,22 @@ function todaysTracks() {
 // Entrants for one race: { pp, horse, starts, wins, places, shows }, where wins/places/shows count
 // 1st/2nd/3rd-place finishes. Real race cards will come from window.MEJIRO_RACECARDS["CODE|YYYY-MM-DD"][race];
 // until that exists, every race gets a placeholder field (the same one each time it's opened).
+const seededRandom = key => {
+  let seed = [...key].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
+  return n => { seed = (seed * 1103515245 + 12345) >>> 0; return (seed >>> 8) % n; };
+};
+
+// How many races a track runs that day: the highest race in its card, or 8–12 for placeholder cards
+function raceCount(code, date) {
+  const card = window.MEJIRO_RACECARDS?.[`${code}|${date}`];
+  if (card) return Math.min(MAX_RACES, Math.max(0, ...Object.keys(card).map(Number)));
+  return 8 + seededRandom(`${code}${date}`)(5);
+}
+
 function raceEntrants(code, date, race) {
   const real = window.MEJIRO_RACECARDS?.[`${code}|${date}`]?.[race];
   if (real) return { entrants: real, placeholder: false };
-  let seed = [...`${code}${date}${race}`].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
-  const rand = n => { seed = (seed * 1103515245 + 12345) >>> 0; return (seed >>> 8) % n; };
+  const rand = seededRandom(`${code}${date}${race}`);
   const entrants = Array.from({ length: 6 + rand(5) }, (_, i) => {
     const starts = rand(5) ? 1 + rand(40) : 0;
     const wins = starts ? rand(Math.ceil(starts * 0.35) + 1) : 0;
@@ -693,9 +705,13 @@ function renderRaces() {
     return;
   }
 
+  const races = raceCount(track.code, t);
+  if (racesView.race > races) racesView.race = 1;
   $('#racesTitle').textContent = `${track.name} · Race ${racesView.race}`;
-  $('#racePicker').innerHTML = Array.from({ length: RACE_COUNT }, (_, i) => i + 1).map(n =>
-    `<button type="button" class="seg ${n === racesView.race ? 'active' : ''}" data-race="${n}">${n}</button>`).join('');
+  // Races the track isn't running today are greyed out
+  $('#racePicker').innerHTML = Array.from({ length: MAX_RACES }, (_, i) => i + 1).map(n =>
+    `<button type="button" class="seg ${n === racesView.race ? 'active' : ''}" data-race="${n}"
+      ${n > races ? `disabled title="No race ${n} today"` : ''}>${n}</button>`).join('');
 
   const { entrants, placeholder } = raceEntrants(track.code, t, racesView.race);
   const note = placeholder ? '<p class="placeholder-note">Placeholder entrants. Race cards aren\'t connected yet.</p>' : '';
@@ -707,19 +723,23 @@ function renderRaces() {
           <td class="num">${e.starts ? lifeLine(e) : '<span class="muted">Debut</span>'}</td></tr>`).join('')}</tbody>
     </table></div>`;
 
-  // Highlight the best figure in each column
+  // Green = the race's highest rate of that type; yellow = above 50%
   const all = entrants.map(e => ({ e, p: wpsPercents(e) }));
   const best = k => Math.max(...all.filter(x => x.p).map(x => x.p[k]));
   const top = { win: best('win'), place: best('place'), show: best('show') };
-  const cell = (p, k) => p ? `<span class="${p[k] === top[k] ? 'top' : ''}">${fmtPct(p[k])}</span>` : '<span class="muted">—</span>';
-  $('#racesCalc').innerHTML = `${note}
+  const cell = (p, k) => !p ? '<span class="muted">—</span>'
+    : `<span class="${p[k] === top[k] ? 'best' : p[k] > 50 ? 'strong' : ''}">${fmtPct(p[k])}</span>`;
+  const shown = wpsShown();
+  $('#racesCalc').innerHTML = `
+    <div class="wps-toggle" role="group" aria-label="Rates to show">${WPS.map(([k, label]) =>
+      `<button type="button" class="seg ${shown.includes(k) ? 'active' : ''}" data-wps="${k}" aria-pressed="${shown.includes(k)}">${label}</button>`).join('')}</div>
+    ${note}
     <div class="calc-list">${all.map(({ e, p }) => `
       <div class="calc-item">
         <div class="calc-head"><span><span class="muted">#${esc(e.pp)}</span> <b>${esc(e.horse)}</b></span>
           <span class="muted tiny">${e.starts ? lifeLine(e) : 'Debut, no record'}</span></div>
-        <div class="calc-row"><span>WIN %</span>${cell(p, 'win')}</div>
-        <div class="calc-row"><span>PLACE %</span>${cell(p, 'place')}</div>
-        <div class="calc-row"><span>SHOW %</span>${cell(p, 'show')}</div>
+        ${WPS.filter(([k]) => shown.includes(k)).map(([k, label]) =>
+          `<div class="calc-row"><span>${label} %</span>${cell(p, k)}</div>`).join('')}
       </div>`).join('')}</div>`;
 }
 
@@ -728,6 +748,20 @@ $('#racesTracks').addEventListener('click', e => {
   if (!b) return;
   racesView.code = b.dataset.code;
   racesView.race = 1;
+  renderRaces();
+});
+
+// Which of WIN / PLACE / SHOW the right column shows; SHOW alone until you change it
+const wpsShown = () => (Array.isArray(state.wpsShown) && state.wpsShown.length ? state.wpsShown : ['show']);
+
+$('#racesCalc').addEventListener('click', e => {
+  const b = e.target.closest('[data-wps]');
+  if (!b) return;
+  const shown = wpsShown();
+  const next = shown.includes(b.dataset.wps) ? shown.filter(k => k !== b.dataset.wps) : [...shown, b.dataset.wps];
+  if (!next.length) return;  // keep at least one on
+  state.wpsShown = WPS.map(([k]) => k).filter(k => next.includes(k));
+  save();
   renderRaces();
 });
 
