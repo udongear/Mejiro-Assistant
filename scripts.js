@@ -836,9 +836,11 @@ function mergeTrack(c) {
 
 /* ----- Setting up the bookmark, and exporting everything captured ----- */
 
+// The bookmark carries your calendar's tracks, so "Every track" ticks only those (re-make it after changing the calendar)
 function captureBookmarkUrl() {
   const site = location.origin + location.pathname;
-  return 'javascript:' + encodeURIComponent('(' + mejiroCapture.toString() + ')(' + JSON.stringify(site) + ')');
+  const mine = activeTracks().filter(t => tracksWithRaceDays.has(t.code)).map(t => t.name);
+  return 'javascript:' + encodeURIComponent('(' + mejiroCapture.toString() + ')(' + JSON.stringify(site) + ',' + JSON.stringify(mine) + ')');
 }
 
 function openCaptureSetup() {
@@ -907,7 +909,7 @@ $('#exportCards').addEventListener('click', async () => {
    so it repeats small helpers instead of using the ones above, and uses only block comments.
    ========================================================= */
 
-function mejiroCapture(site) {
+function mejiroCapture(site, myTracks) {
   if (window.__mejiroBusy) return;
   window.__mejiroBusy = true;
   const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -1026,6 +1028,11 @@ function mejiroCapture(site) {
     return [...found.values()];
   };
 
+  /* Is this one of the tracks on your Mejiro calendar? Names differ ("Parx" vs "Parx Racing"), so compare without the generic words */
+  const norm = s => clean(s).toLowerCase().replace(/race ?course|race ?track|raceway|racing|gaming|casino|resort|park|downs|the\b|[^a-z]/g, '');
+  const isMine = name => { const x = norm(name);
+    return x.length >= 3 && (myTracks || []).some(m => { const y = norm(m); return y.length >= 3 && (y.includes(x) || x.includes(y)); }); };
+
   /* Switch tracks inside the page (as its own links do), so this panel keeps running; wait for the new program */
   const openTrack = async t => {
     if (location.pathname + location.search === t.path && findRunners()) return true;
@@ -1048,6 +1055,13 @@ function mejiroCapture(site) {
       copy.querySelectorAll('*').forEach(n => [...n.attributes].forEach(a => {
         if (!['class', 'id', 'role', 'aria-label', 'aria-expanded', 'href'].includes(a.name) && !a.name.startsWith('data-')) n.removeAttribute(a.name);
       }));
+      /* Long repeats (40 tracks, 12 runners) only need their first few to show the pattern */
+      [copy, ...copy.querySelectorAll('*')].forEach(n => {
+        if (n.children.length <= 4) return;
+        const extra = [...n.children].slice(4);
+        extra.forEach(c => c.remove());
+        n.append(document.createComment(` +${extra.length} more `));
+      });
       return copy.outerHTML;
     };
     const runners = findRunners();
@@ -1061,7 +1075,11 @@ function mejiroCapture(site) {
       .map(a => `${a.getAttribute('href')}  ${clean(a.textContent).slice(0, 60)}`).slice(0, 200);
     const name = trackName();
     const menu = name && leaves().filter(el => clean(el.textContent) === name && !el.closest('.track-name')).slice(0, 2);
-    return ['<!-- RUNNER LIST -->', anchor ? strip(up(anchor, 2) || anchor) : '(not found)',
+    /* On a list page (Today's Races) there are no runners: show the track list itself */
+    const group = !runners && document.querySelector('[class*="track-list"]');
+    const listRoot = group && (group.closest('main, [class*="content"]') || up(group, 3));
+    return [
+      '<!-- TRACK LIST -->', listRoot ? strip(listRoot) : '(none)','<!-- RUNNER LIST -->', anchor ? strip(up(anchor, 2) || anchor) : '(not found)',
       '<!-- LIFE PANEL -->', life ? strip(up(life, 8) || life) : '(no "LIFE" text on the page: open a horse\'s record by hand first)',
       '<!-- TOP OF PAGE -->', top.join('\n'),
       '<!-- ADDRESS -->', location.pathname + location.search,
@@ -1189,8 +1207,9 @@ function mejiroCapture(site) {
 
   const first = findRunners();
   if (!first || !first.length) {
-    show("Couldn't find the runners on this page. Open a race's <b>PROGRAM</b> tab and try again." +
-      note('If it still fails, copy the page outline and paste it to Claude.') + button('mc-copy', 'Copy page outline', true) + button('mc-close', 'Close'));
+    show("No horses on this page. Open a track's <b>PROGRAM</b> (click a track), then click the bookmark again." +
+      note("On TwinSpires' Today's Races list? Copy the page outline and paste it to Claude, so Every track can start from this list.") +
+      button('mc-copy', 'Copy page outline', true) + button('mc-close', 'Close'));
     copyButton();
     box.querySelector('#mc-close').onclick = finish;
     return;
@@ -1221,10 +1240,12 @@ function mejiroCapture(site) {
       copyButton();
       return;
     }
-    /* Harness and greyhound cards start unticked */
-    show(`<div>Today's tracks on TwinSpires (${tracks.length}):</div><div style="margin-top:8px;max-height:40vh;overflow:auto">` +
+    /* Your calendar's tracks come first and start ticked; without a calendar list, everything but harness and greyhound */
+    const ticked = t => myTracks && myTracks.length ? isMine(t.name) : !/harness|greyhound/i.test(t.path);
+    tracks.sort((a, b) => ticked(b) - ticked(a));
+    show(`<div>Today's tracks on TwinSpires (${tracks.length}). Ticked: the ones on your Mejiro calendar.</div><div style="margin-top:8px;max-height:40vh;overflow:auto">` +
       tracks.map((t, i) => `<label style="display:flex;gap:8px;align-items:center;padding:2px 0;cursor:pointer">` +
-        `<input type="checkbox" data-i="${i}" ${/harness|greyhound/i.test(t.path) ? '' : 'checked'}> ${html(t.name)}</label>`).join('') + '</div>' +
+        `<input type="checkbox" data-i="${i}" ${ticked(t) ? 'checked' : ''}> ${html(t.name)}</label>`).join('') + '</div>' +
       button('mc-go', 'Capture ticked tracks', true) + button('mc-close', 'Close') +
       note('About a minute or two per track. Keep this tab on screen until it finishes.'));
     box.querySelector('#mc-close').onclick = finish;
