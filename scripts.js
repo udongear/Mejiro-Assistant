@@ -867,13 +867,14 @@ $('#scrapeAll').addEventListener('click', () => {
   openModal(`
     <h3>Scrape all tracks</h3>
     <ol class="scrape-steps">
-      <li>Open TwinSpires and go to any track's <b>PROGRAM</b> (Advanced view).</li>
-      <li>Click your <b>Mejiro Capture</b> bookmark, then <b>Every track</b>. Untick any tracks you don't want.</li>
-      <li>Keep that tab on screen while it works, about a minute or two per track. Browsers slow down hidden tabs.</li>
+      <li>Open TwinSpires' <b>Today's Races</b> list, filtered how you like (e.g. Thoroughbred, North American).</li>
+      <li>Click your <b>Mejiro Capture</b> bookmark. Your calendar's tracks with races left come ticked; change any you like.</li>
+      <li>Click <b>Capture ticked tracks</b> and keep that tab on screen while it works (about a second per horse). Browsers slow down hidden tabs.</li>
       <li>When it finishes, click <b>Send to Mejiro</b>. Every track lands here at once.</li>
     </ol>
+    <p class="muted small-text">Programs open in whichever view you used last on TwinSpires. Leave it on <b>Advanced</b>, the view the bookmark reads.</p>
     <div class="modal-actions">
-      <a class="btn primary" href="https://www.twinspires.com/" target="twinspires" rel="noopener">Open TwinSpires</a>
+      <a class="btn primary" href="https://www.twinspires.com/bet/todays-races/time" target="twinspires" rel="noopener">Open Today's Races</a>
       <button class="btn" id="scrapeSetup" type="button">Set up the bookmark</button>
       <button class="btn ghost" id="scrapeClose" type="button">Close</button>
     </div>`);
@@ -1009,43 +1010,46 @@ function mejiroCapture(site, myTracks) {
     return hit ? hit[1] : '';
   };
 
-  /* Today's tracks: links shaped like this page's address but with another track's name in it,
-     e.g. /bet/program/classic/parx-racing/prx/Thoroughbred/1/advanced next to .../finger-lakes/fl/... */
-  const slug = s => clean(s).toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-  const trackLinks = () => {
-    const here = location.pathname.split('/').filter(Boolean), mine = slug(trackName());
-    const at = here.findIndex(s => { const x = slug(decodeURIComponent(s)); return mine && x.length > 2 && (x === mine || x.startsWith(mine) || mine.startsWith(x)); });
-    if (at < 0) return [];
-    const found = new Map([[here[at], { name: trackName(), path: location.pathname + location.search }]]);
-    document.querySelectorAll('a[href]').forEach(a => {
-      if (box.contains(a)) return;
-      let u;
-      try { u = new URL(a.href, location.href); } catch (e) { return; }
-      const p = u.pathname.split('/').filter(Boolean);
-      if (u.origin !== location.origin || p.length !== here.length || p.slice(0, at).join('/') !== here.slice(0, at).join('/') || found.has(p[at])) return;
-      found.set(p[at], { name: decodeURIComponent(p[at]).replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()), path: u.pathname + u.search });
+  /* TwinSpires' Today's Races list (your filters apply): one row per track, with an id like
+     "featured-track-ind-race-10" (track code, the race it's on) and a badge with minutes to post, or OFFICIAL once that race is run */
+  const listRows = () => {
+    const found = new Map();
+    document.querySelectorAll('.track-list--row[id*="-track-"]').forEach(row => {
+      const m = row.id.match(/-track-([a-z0-9]+)-race-(\d+)$/i);
+      const nameEl = [...row.querySelectorAll('.track-name')].pop();
+      if (!m || !nameEl || found.has(m[1])) return;  /* Featured tracks are listed twice */
+      const badge = row.querySelector('.mtp-badge');
+      const status = badge ? cellTexts(badge).join(' ') : '';
+      found.set(m[1], { code: m[1], name: clean(nameEl.textContent), race: +m[2], status, finished: /official/i.test(status) });
     });
     return [...found.values()];
+  };
+
+  /* Change pages inside TwinSpires (as its own Back button does), so this panel keeps running */
+  const waitFor = async (test, tries) => { for (let i = 0; i < tries; i++) { if (test()) return true; await sleep(200); } return !!test(); };
+  const toList = async () => {
+    if (listRows().length) return true;
+    history.pushState(null, '', '/bet/todays-races/time');
+    window.dispatchEvent(new PopStateEvent('popstate', { state: null }));
+    return waitFor(() => listRows().length, 75);
+  };
+  /* Open a track's program by pressing its name in the list, then wait for its runners */
+  const openFromList = async t => {
+    if (!await toList()) return false;
+    const row = document.querySelector(`.track-list--row[id*="-track-${t.code}-race-"]`);
+    if (!row) return false;
+    const target = [...row.querySelectorAll('.track-name')].pop() || row;
+    target.scrollIntoView({ block: 'center' });
+    press(target);
+    if (!await waitFor(() => !listRows().length && (findRunners() || []).length && raceNow(), 100)) return false;
+    await sleep(800);
+    return true;
   };
 
   /* Is this one of the tracks on your Mejiro calendar? Names differ ("Parx" vs "Parx Racing"), so compare without the generic words */
   const norm = s => clean(s).toLowerCase().replace(/race ?course|race ?track|raceway|racing|gaming|casino|resort|park|downs|the\b|[^a-z]/g, '');
   const isMine = name => { const x = norm(name);
     return x.length >= 3 && (myTracks || []).some(m => { const y = norm(m); return y.length >= 3 && (y.includes(x) || x.includes(y)); }); };
-
-  /* Switch tracks inside the page (as its own links do), so this panel keeps running; wait for the new program */
-  const openTrack = async t => {
-    if (location.pathname + location.search === t.path && findRunners()) return true;
-    const before = trackName();
-    history.pushState(null, '', t.path);
-    window.dispatchEvent(new PopStateEvent('popstate', { state: null }));
-    for (let i = 0; i < 100; i++) {
-      await sleep(200);
-      const r = findRunners();
-      if (trackName() && trackName() !== before && r && r.length && raceNow()) { await sleep(800); return true; }
-    }
-    return false;
-  };
 
   /* Three parts: the runner list, an open LIFE panel if any, and the short texts near the top of the page */
   const outline = () => {
@@ -1127,13 +1131,18 @@ function mejiroCapture(site, myTracks) {
     return raceNow() === n;
   };
 
-  /* Every race on the track that's showing: back to Race 1, then forward until there's no next-race button */
-  const readCard = async prefix => {
+  /* The track that's showing, from race `from` (1 for the whole card) forward until there's no next-race button */
+  const readCard = async (prefix, from) => {
     const races = [];
     let n = raceNow() || 1;
-    while (n > 1) {
+    while (n > from) {
       show(`${prefix}Going back to Race ${n - 1}…`);
       if (!await goTo(n - 1)) break;
+      n = raceNow();
+    }
+    while (n < from) {
+      show(`${prefix}Going to Race ${n + 1}…`);
+      if (!await goTo(n + 1)) break;
       n = raceNow();
     }
     let total = null;
@@ -1169,7 +1178,7 @@ function mejiroCapture(site, myTracks) {
     const all = cards.flatMap(c => c.races.flatMap(r => r.entrants));
     const found = all.filter(e => e.found).length;
     const list = cards.map(c => { const n = c.races.flatMap(r => r.entrants), f = n.filter(e => e.found).length;
-      return `<b>${html(c.track)}</b>: ${c.races.length} race${c.races.length === 1 ? '' : 's'}, ${n.length} horses` + (f < n.length ? ` <span style="color:#FF5C6C">(${n.length - f} without a record)</span>` : ''); });
+      return `<b>${html(c.track)}</b>: ${c.races.length} race${c.races.length === 1 ? '' : 's'}, ${n.length} horse${n.length === 1 ? '' : 's'}` + (f < n.length ? ` <span style="color:#FF5C6C">(${n.length - f} without a record)</span>` : ''); });
     show(`<div>Read ${found} of ${all.length} records across ${cards.length} tracks.</div>` + note(list.join('<br>')) +
       (failed.length ? note(`<span style="color:#FF5C6C">Couldn't open: ${failed.map(html).join(', ')}</span>`) : '') +
       (cards.length ? sendLink : '') + button('mc-close', 'Close') +
@@ -1205,10 +1214,57 @@ function mejiroCapture(site, myTracks) {
     });
   };
 
+  /* Every track: pick from TwinSpires' Today's Races list, then open each track from it in turn */
+  const chooseTracks = async () => {
+    show("Opening TwinSpires' Today's Races list…");
+    await toList();
+    const tracks = listRows();
+    if (!tracks.length) {
+      show("Couldn't open TwinSpires' Today's Races list. Go to <b>Bet Now → Today's Races</b> yourself, then press <b>Look again</b>." +
+        button('mc-again', 'Look again', true) + button('mc-copy', 'Copy page outline') + button('mc-close', 'Close') +
+        note('Still nothing? Copy the page outline and paste it to Claude.'));
+      box.querySelector('#mc-again').onclick = chooseTracks;
+      box.querySelector('#mc-close').onclick = finish;
+      copyButton();
+      return;
+    }
+    /* Ticked: your calendar's tracks (listed first) that still have races to run */
+    const ticked = t => !t.finished && (!myTracks || !myTracks.length || isMine(t.name));
+    tracks.sort((a, b) => ticked(b) - ticked(a));
+    const label = 'display:flex;gap:8px;align-items:center;padding:2px 0;cursor:pointer';
+    show(`<div>Today's tracks on TwinSpires (${tracks.length}). Ticked: the ones on your Mejiro calendar with races left.</div>` +
+      `<label style="${label};margin-top:8px;color:#C8B4FF"><input type="checkbox" id="mc-upcoming" checked> Only races that haven't run yet</label>` +
+      `<div style="margin-top:6px;max-height:40vh;overflow:auto">` +
+      tracks.map((t, i) => `<label style="${label}"><input type="checkbox" data-i="${i}" ${ticked(t) ? 'checked' : ''}> ${html(t.name)}` +
+        `<span style="margin-left:auto;font-size:12px;color:#9C92BC">${t.finished ? 'finished' : `R${t.race}${t.status ? ' · ' + html(t.status) : ''}`}</span></label>`).join('') + '</div>' +
+      button('mc-go', 'Capture ticked tracks', true) + button('mc-close', 'Close') +
+      note('About a second per horse. Keep this tab on screen until it finishes: browsers slow down hidden tabs.'));
+    box.querySelector('#mc-close').onclick = finish;
+    box.querySelector('#mc-go').onclick = async () => {
+      const picked = [...box.querySelectorAll('input[data-i]:checked')].map(c => tracks[+c.dataset.i]);
+      const upcoming = box.querySelector('#mc-upcoming').checked;
+      if (!picked.length) return;
+      running = true;
+      const cards = [], failed = [];
+      for (let i = 0; i < picked.length && !stop; i++) {
+        const t = picked[i], prefix = `<b>${html(t.name)}</b> (track ${i + 1} of ${picked.length}) · `;
+        show(`${prefix}opening…`);
+        if (!await openFromList(t)) { failed.push(t.name); continue; }
+        /* A finished card you ticked anyway is read in full */
+        const { races, total } = await readCard(prefix, upcoming && !t.finished ? t.race : 1);
+        if (races.length) cards.push({ track: t.name, total, races });
+        else failed.push(t.name);
+      }
+      doneAll(cards, failed);
+    };
+  };
+
   const first = findRunners();
   if (!first || !first.length) {
-    show("No horses on this page. Open a track's <b>PROGRAM</b> (click a track), then click the bookmark again." +
-      note("On TwinSpires' Today's Races list? Copy the page outline and paste it to Claude, so Every track can start from this list.") +
+    /* On the Today's Races list itself: straight to picking tracks */
+    if (listRows().length) return chooseTracks();
+    show("No horses on this page. Open a track's <b>PROGRAM</b>, or TwinSpires' <b>Today's Races</b> list, then click the bookmark again." +
+      note('If it still fails, copy the page outline and paste it to Claude.') +
       button('mc-copy', 'Copy page outline', true) + button('mc-close', 'Close'));
     copyButton();
     box.querySelector('#mc-close').onclick = finish;
@@ -1218,7 +1274,7 @@ function mejiroCapture(site, myTracks) {
   show(`<div><b>${html(track) || 'This track'}</b>${start ? ` · Race ${start}` : ''}: ${first.length} runners.</div>` +
     button('mc-one', 'This race', true) + button('mc-all', 'All races') + button('mc-every', 'Every track') + button('mc-close', 'Close') +
     note('<b>All races</b> goes back to Race 1, then reads every race on the card (about a second per horse). ' +
-      '<b>Every track</b> does that for each of today\'s tracks. Keep this tab on screen while it works: browsers slow down tabs that are hidden.'));
+      '<b>Every track</b> goes to TwinSpires\' Today\'s Races list so you can pick tracks. Keep this tab on screen while it works: browsers slow down hidden tabs.'));
   box.querySelector('#mc-close').onclick = finish;
   box.querySelector('#mc-one').onclick = async () => {
     const entrants = await readRace('');
@@ -1226,45 +1282,8 @@ function mejiroCapture(site, myTracks) {
   };
   box.querySelector('#mc-all').onclick = async () => {
     running = true;
-    const { races, total } = await readCard('');
+    const { races, total } = await readCard('', 1);
     done(races, track, total);
-  };
-  const chooseTracks = () => {
-    const tracks = trackLinks();
-    if (tracks.length < 2) {
-      show("Couldn't find TwinSpires' list of today's tracks on this page. If there's a track menu or list, open it, then press <b>Look again</b>." +
-        button('mc-again', 'Look again', true) + button('mc-copy', 'Copy page outline') + button('mc-close', 'Close') +
-        note('Still nothing? Copy the page outline (with the track menu open) and paste it to Claude.'));
-      box.querySelector('#mc-again').onclick = chooseTracks;
-      box.querySelector('#mc-close').onclick = finish;
-      copyButton();
-      return;
-    }
-    /* Your calendar's tracks come first and start ticked; without a calendar list, everything but harness and greyhound */
-    const ticked = t => myTracks && myTracks.length ? isMine(t.name) : !/harness|greyhound/i.test(t.path);
-    tracks.sort((a, b) => ticked(b) - ticked(a));
-    show(`<div>Today's tracks on TwinSpires (${tracks.length}). Ticked: the ones on your Mejiro calendar.</div><div style="margin-top:8px;max-height:40vh;overflow:auto">` +
-      tracks.map((t, i) => `<label style="display:flex;gap:8px;align-items:center;padding:2px 0;cursor:pointer">` +
-        `<input type="checkbox" data-i="${i}" ${ticked(t) ? 'checked' : ''}> ${html(t.name)}</label>`).join('') + '</div>' +
-      button('mc-go', 'Capture ticked tracks', true) + button('mc-close', 'Close') +
-      note('About a minute or two per track. Keep this tab on screen until it finishes.'));
-    box.querySelector('#mc-close').onclick = finish;
-    box.querySelector('#mc-go').onclick = async () => {
-      const picked = [...box.querySelectorAll('input[data-i]:checked')].map(c => tracks[+c.dataset.i]);
-      if (!picked.length) return;
-      running = true;
-      const cards = [], failed = [];
-      for (let i = 0; i < picked.length && !stop; i++) {
-        const t = picked[i];
-        show(`<b>${html(t.name)}</b> (track ${i + 1} of ${picked.length}): opening…`);
-        if (!await openTrack(t)) { failed.push(t.name); continue; }
-        const name = trackName() || t.name;
-        const { races, total } = await readCard(`<b>${html(name)}</b> (track ${i + 1} of ${picked.length}) · `);
-        if (races.length) cards.push({ track: name, total, races });
-        else failed.push(name);
-      }
-      doneAll(cards, failed);
-    };
   };
   box.querySelector('#mc-every').onclick = chooseTracks;
 }
