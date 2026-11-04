@@ -134,6 +134,11 @@ function localISO(d) {
 
 function today() { return localISO(new Date()); }
 
+function parseDate(iso) {
+  const [y, m, d] = iso.split('-').map(Number);
+  return new Date(y, m - 1, d);
+}
+
 function money(n, signed = false) {
   const s = Math.abs(n).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
   if (!signed) return n < 0 ? '-' + s : s;
@@ -358,15 +363,15 @@ function renderUser() {
 }
 
 function renderTrackSelects() {
-  // Log bets: the Calendar's active tracks, by code
-  const bet = $('#betForm').track, bv = bet.value;
-  bet.innerHTML = '<option value="">Select track…</option>' + trackOptions(activeTracks().filter(t => tracksWithRaceDays.has(t.code)));
-  bet.value = bv;
+  const betTracks = [...new Set(state.bets.map(b => b.track))].sort();
+
+  // Log bets suggests today's scraped tracks first, then any track you've bet on before
+  const scraped = state.cards && state.cards.date === today() ? Object.values(state.cards.tracks).map(t => t.name).sort() : [];
+  $('#trackList').innerHTML = [...new Set([...scraped, ...betTracks])].map(n => `<option value="${esc(n)}"></option>`).join('');
 
   // History filters by the tracks you've actually bet on
   const hist = $('#histTrack'), hv = hist.value;
-  hist.innerHTML = '<option value="">All tracks</option>'
-    + [...new Set(state.bets.map(b => b.track))].sort().map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
+  hist.innerHTML = '<option value="">All tracks</option>' + betTracks.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
   hist.value = hv;
 }
 
@@ -487,15 +492,13 @@ $('#betRows').addEventListener('click', e => {
 $('#betForm').addEventListener('submit', e => {
   e.preventDefault();
   const f = e.target;
-  const track = CAL.tracks.find(t => t.code === f.track.value);
   const logged = $$('#betRows tr').map(tr => {
     const v = n => tr.querySelector(`[name=${n}]`);
     const status = v('result').value;
     return {
       id: uid(),
       date: f.date.value,
-      track: track ? track.name : f.track.value,
-      trackCode: f.track.value,
+      track: f.track.value.trim(),
       race: v('race').value,
       horse: v('horse').value.trim(),
       type: v('type').value,
@@ -552,8 +555,9 @@ function settleBet(bet, status, payout) {
    Today's Races — race cards captured from TwinSpires with the Mejiro Capture bookmark.
    Pick a track, then a race: entrants in the middle, win/place/show % on the right.
    Each day's captures are one Firestore document, users/{uid}/racecards/{YYYY-MM-DD}:
-     { date, tracks: { KEY: { name, code, total, races: { "N": { capturedAt, entrants: [...] } } } } }
-   KEY is the calendar's track code, or "TS-<name>" for a track the calendar doesn't list.
+     { date, tracks: { KEY: { name, total, races: { "N": { capturedAt, entrants: [...] } } } } }
+   KEY is the TwinSpires track name in lowercase letters and digits ("parxracing").
+   The day starts empty: "Scrape all tracks" fills it.
    ========================================================= */
 
 const MAX_RACES = 15;
@@ -561,27 +565,7 @@ const WPS = [['win', 'WIN'], ['place', 'PLACE'], ['show', 'SHOW']];
 let racesView = { date: null, key: null, race: 1 };
 let cardsLoading = false;
 
-// Active tracks with a race day today, A–Z
-function todaysTracks() {
-  const t = today();
-  const active = new Set(activeTracks().map(x => x.code));
-  const codes = new Set(CAL.race_days
-    .filter(d => d.race_date === t && d.status !== 'cancelled' && active.has(d.track_code))
-    .map(d => d.track_code));
-  return CAL.tracks.filter(x => codes.has(x.code)).sort((a, b) => a.name.localeCompare(b.name));
-}
-
-// TwinSpires and the calendar name tracks differently ("FINGER LAKES" vs "Finger Lakes Gaming & Racetrack"),
-// so compare without the generic words
-const normTrack = s => String(s || '').toLowerCase()
-  .replace(/race ?course|race ?track|raceway|racing|gaming|casino|resort|park|downs|the\b|[^a-z]/g, '');
-
-function matchTrack(name) {
-  const n = normTrack(name);
-  if (n.length < 3) return null;
-  const fits = t => { const m = normTrack(t.name); return m.length >= 3 && (m.includes(n) || n.includes(m)); };
-  return todaysTracks().find(fits) || CAL.tracks.find(fits) || null;
-}
+const trackKey = name => String(name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
 // Makes state.cards the given day's captures (today's arrive with the account)
 async function ensureCards(date) {
@@ -598,21 +582,14 @@ async function ensureCards(date) {
   synced.cards = JSON.stringify(state.cards);
 }
 
-// Left column: today's calendar tracks plus any captured track the calendar doesn't list; captured first
+// A track opens on its first scraped race (races already run are usually skipped)
+const firstRace = track => track ? Math.min(...Object.keys(track.card.races).map(Number)) : 1;
+
+// Left column: the tracks scraped today, A–Z
 function racesTracks(date) {
   const captured = state.cards && state.cards.date === date ? state.cards.tracks : {};
-  const list = todaysTracks().map(t => ({ key: t.code, name: t.name, state: t.state }));
-  Object.entries(captured).forEach(([key, t]) => { if (!list.some(x => x.key === key)) list.push({ key, name: t.name, state: '', extra: true }); });
-  return list.map(x => ({ ...x, card: captured[x.key] || null, youtube: (CAL.tracks.find(t => t.code === x.key) || {}).youtube }))
-    .sort((a, b) => (!!b.card - !!a.card) || a.name.localeCompare(b.name));
-}
-
-// Links to the track's channel once calendar\data\tracks.csv has its "youtube" column filled in; greyed out until then
-const YT_SVG = '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><rect x="1" y="4" width="22" height="16" rx="5" fill="currentColor"/><path d="M10 8.5v7l6-3.5z" fill="#fff"/></svg>';
-function youtubeIcon(url) {
-  return url
-    ? `<a class="yt-link" href="${esc(url)}" target="_blank" rel="noopener" title="YouTube channel" aria-label="YouTube channel">${YT_SVG}</a>`
-    : `<span class="yt-link off" title="No YouTube channel added yet">${YT_SVG}</span>`;
+  return Object.entries(captured).map(([key, card]) => ({ key, name: card.name, card }))
+    .sort((a, b) => a.name.localeCompare(b.name));
 }
 
 // WIN = 1st ÷ starts, PLACE = (1st + 2nd) ÷ starts, SHOW = (1st + 2nd + 3rd) ÷ starts
@@ -632,7 +609,7 @@ const wpsToggle = () => `<div class="wps-toggle" role="group" aria-label="Rates 
 
 function captureSteps(trackName, race) {
   return `<div class="capture-steps">
-    <p><b>Race ${race} isn't captured yet.</b></p>
+    <p><b>Race ${race} wasn't scraped</b> (it may have run already). To add it:</p>
     <ol>
       <li>On TwinSpires, open ${esc(trackName)} Race ${race} on the <b>PROGRAM</b> tab.</li>
       <li>Click your <b>Mejiro Capture</b> bookmark. It opens each horse and reads its record.</li>
@@ -649,26 +626,26 @@ function renderRaces() {
     if (!cardsLoading) { cardsLoading = true; ensureCards(t).finally(() => { cardsLoading = false; renderRaces(); }); }
   }
   const tracks = racesTracks(t);
-  if (racesView.date !== t || !tracks.some(x => x.key === racesView.key)) racesView = { date: t, key: tracks[0]?.key || null, race: 1 };
+  if (racesView.date !== t || !tracks.some(x => x.key === racesView.key)) racesView = { date: t, key: tracks[0]?.key || null, race: firstRace(tracks[0]) };
   $('#racesDate').textContent = parseDate(t).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
   $('#racesTracks').innerHTML = tracks.map(x => {
-    const n = x.card ? Object.keys(x.card.races).length : 0;
+    const n = Object.keys(x.card.races).length;
     return `
       <div class="race-track-row ${x.key === racesView.key ? 'active' : ''}">
         <button type="button" class="race-track" data-key="${esc(x.key)}">
           <span class="name">${esc(x.name)}</span>
-          <span class="muted tiny">${n ? `${n} race${n === 1 ? '' : 's'}` : esc(x.state)}</span>
+          <span class="muted tiny">${n} race${n === 1 ? '' : 's'}</span>
         </button>
-        ${youtubeIcon(x.youtube)}
-        ${x.extra ? `<button type="button" class="track-remove" data-remove-track="${esc(x.key)}" title="Remove this track's captures" aria-label="Remove ${esc(x.name)}">✕</button>` : ''}
+        <button type="button" class="track-remove" data-remove-track="${esc(x.key)}" title="Remove this track's captures" aria-label="Remove ${esc(x.name)}">✕</button>
       </div>`;
-  }).join('') || '<p class="muted small-text">No racing at active tracks today.</p>';
+  }).join('');
 
   const track = tracks.find(x => x.key === racesView.key);
   if (!track) {
     $('#racesTitle').textContent = 'Entrants';
     $('#racePicker').innerHTML = '';
-    $('#racesEntrants').innerHTML = $('#racesCalc').innerHTML = '<p class="muted small-text">Nothing to show today.</p>';
+    $('#racesEntrants').innerHTML = '<p class="muted small-text">Start the day with <b>Scrape all tracks</b>.</p>';
+    $('#racesCalc').innerHTML = '';
     return;
   }
 
@@ -720,7 +697,7 @@ function renderRaces() {
 }
 
 $('#racesTracks').addEventListener('click', async e => {
-  // A captured track the calendar doesn't list (or a misread name) can be removed
+  // A track you don't want today can be removed
   const remove = e.target.closest('[data-remove-track]');
   if (remove) {
     const t = state.cards.tracks[remove.dataset.removeTrack];
@@ -732,7 +709,7 @@ $('#racesTracks').addEventListener('click', async e => {
   const b = e.target.closest('[data-key]');
   if (!b) return;
   racesView.key = b.dataset.key;
-  racesView.race = 1;
+  racesView.race = firstRace(racesTracks(today()).find(x => x.key === b.dataset.key));
   renderRaces();
 });
 
@@ -796,6 +773,7 @@ async function importCapture(c) {
   if (date === today()) racesView = { date, key: saved[0].key, race: saved[0].numbers[0] };
   goTab('races');
   renderRaces();
+  renderTrackSelects();
   const horses = saved.flatMap(s => s.horses);
   const missing = horses.filter(e => e.starts == null).length;
   const { name, numbers } = saved[0];
@@ -810,8 +788,8 @@ function mergeTrack(c) {
   const list = !c ? [] : Array.isArray(c.races) ? c.races : [{ race: c.race, entrants: c.entrants }];
   const races = list.filter(r => r && Array.isArray(r.entrants) && r.entrants.length && int(r.race) >= 1 && int(r.race) <= MAX_RACES);
   if (!c || !c.track || !races.length) return null;
-  const match = matchTrack(c.track);
-  const key = match ? match.code : 'TS-' + normTrack(c.track);
+  const key = trackKey(c.track);
+  if (!key) return null;
   const prev = state.cards.tracks[key] || { races: {} };
   const capturedAt = c.capturedAt || new Date().toISOString();
   const cleaned = Object.fromEntries(races.map(r => [int(r.race), {
@@ -825,8 +803,7 @@ function mergeTrack(c) {
   }]));
   // Capturing a race again replaces it; the track's other races stay
   state.cards.tracks[key] = {
-    name: match ? match.name : String(c.track).slice(0, 60),
-    code: match ? match.code : null,
+    name: String(c.track).slice(0, 60),
     total: int(c.total) || prev.total || null,
     races: { ...prev.races, ...cleaned },
   };
@@ -836,11 +813,9 @@ function mergeTrack(c) {
 
 /* ----- Setting up the bookmark, and exporting everything captured ----- */
 
-// The bookmark carries your calendar's tracks, so "Every track" ticks only those (re-make it after changing the calendar)
 function captureBookmarkUrl() {
   const site = location.origin + location.pathname;
-  const mine = activeTracks().filter(t => tracksWithRaceDays.has(t.code)).map(t => t.name);
-  return 'javascript:' + encodeURIComponent('(' + mejiroCapture.toString() + ')(' + JSON.stringify(site) + ',' + JSON.stringify(mine) + ')');
+  return 'javascript:' + encodeURIComponent('(' + mejiroCapture.toString() + ')(' + JSON.stringify(site) + ')');
 }
 
 function openCaptureSetup() {
@@ -868,7 +843,7 @@ $('#scrapeAll').addEventListener('click', () => {
     <h3>Scrape all tracks</h3>
     <ol class="scrape-steps">
       <li>Open TwinSpires' <b>Today's Races</b> list, filtered how you like (e.g. Thoroughbred, North American).</li>
-      <li>Click your <b>Mejiro Capture</b> bookmark. Your calendar's tracks with races left come ticked; change any you like.</li>
+      <li>Click your <b>Mejiro Capture</b> bookmark. Every track it finds comes ticked; use <b>Deselect all</b> to pick just a few.</li>
       <li>Click <b>Capture ticked tracks</b> and keep that tab on screen while it works (about a second per horse). Browsers slow down hidden tabs.</li>
       <li>When it finishes, click <b>Send to Mejiro</b>. Every track lands here at once.</li>
     </ol>
@@ -891,13 +866,13 @@ $('#exportCards').addEventListener('click', async () => {
     try { days = (await userDoc().collection('racecards').get()).docs.map(d => d.data()); }
     catch (err) { return toast("Couldn't load your captures: " + err.message); }
   }
-  const cols = ['date', 'track', 'track_code', 'race', 'pp', 'horse', 'starts', 'wins', 'places', 'shows', 'scratched', 'captured_at'];
+  const cols = ['date', 'track', 'race', 'pp', 'horse', 'starts', 'wins', 'places', 'shows', 'scratched', 'captured_at'];
   const cell = v => /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : v;
   const rows = [];
   days.sort((a, b) => a.date.localeCompare(b.date)).forEach(day =>
     Object.values(day.tracks || {}).sort((a, b) => a.name.localeCompare(b.name)).forEach(t =>
       Object.entries(t.races || {}).sort((a, b) => a[0] - b[0]).forEach(([n, r]) =>
-        r.entrants.forEach(e => rows.push([day.date, t.name, t.code || '', n, e.pp, e.horse, e.starts ?? '', e.wins ?? '',
+        r.entrants.forEach(e => rows.push([day.date, t.name, n, e.pp, e.horse, e.starts ?? '', e.wins ?? '',
           e.places ?? '', e.shows ?? '', e.scratched ? 'yes' : '', r.capturedAt].map(cell).join(','))))));
   if (!rows.length) return toast('Nothing captured yet');
   download(`mejiro-race-cards-${today()}.csv`, [cols.join(','), ...rows].join('\n'), 'text/csv');
@@ -910,7 +885,7 @@ $('#exportCards').addEventListener('click', async () => {
    so it repeats small helpers instead of using the ones above, and uses only block comments.
    ========================================================= */
 
-function mejiroCapture(site, myTracks) {
+function mejiroCapture(site) {
   if (window.__mejiroBusy) return;
   window.__mejiroBusy = true;
   const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -1046,11 +1021,6 @@ function mejiroCapture(site, myTracks) {
     return true;
   };
 
-  /* Is this one of the tracks on your Mejiro calendar? Names differ ("Parx" vs "Parx Racing"), so compare without the generic words */
-  const norm = s => clean(s).toLowerCase().replace(/race ?course|race ?track|raceway|racing|gaming|casino|resort|park|downs|the\b|[^a-z]/g, '');
-  const isMine = name => { const x = norm(name);
-    return x.length >= 3 && (myTracks || []).some(m => { const y = norm(m); return y.length >= 3 && (y.includes(x) || x.includes(y)); }); };
-
   /* Three parts: the runner list, an open LIFE panel if any, and the short texts near the top of the page */
   const outline = () => {
     const strip = root => {
@@ -1074,21 +1044,15 @@ function mejiroCapture(site, myTracks) {
     const top = leaves().filter(el => { const r = el.getBoundingClientRect(); return r.top < 320 && r.height > 0; })
       .map(el => `${el.tagName.toLowerCase()}.${typeof el.className === 'string' ? el.className.trim().replace(/\s+/g, '.') : ''}: ${clean(el.textContent)}`)
       .filter(t => !/:\s*$/.test(t)).slice(0, 120);
-    /* For "Every track": the page's links, and wherever else the track's name appears (a track menu lists it too) */
-    const links = [...document.querySelectorAll('a[href]')].filter(a => !box.contains(a))
-      .map(a => `${a.getAttribute('href')}  ${clean(a.textContent).slice(0, 60)}`).slice(0, 200);
-    const name = trackName();
-    const menu = name && leaves().filter(el => clean(el.textContent) === name && !el.closest('.track-name')).slice(0, 2);
     /* On a list page (Today's Races) there are no runners: show the track list itself */
     const group = !runners && document.querySelector('[class*="track-list"]');
     const listRoot = group && (group.closest('main, [class*="content"]') || up(group, 3));
     return [
-      '<!-- TRACK LIST -->', listRoot ? strip(listRoot) : '(none)','<!-- RUNNER LIST -->', anchor ? strip(up(anchor, 2) || anchor) : '(not found)',
+      '<!-- TRACK LIST -->', listRoot ? strip(listRoot) : '(none)',
+      '<!-- RUNNER LIST -->', anchor ? strip(up(anchor, 2) || anchor) : '(not found)',
       '<!-- LIFE PANEL -->', life ? strip(up(life, 8) || life) : '(no "LIFE" text on the page: open a horse\'s record by hand first)',
       '<!-- TOP OF PAGE -->', top.join('\n'),
-      '<!-- ADDRESS -->', location.pathname + location.search,
-      '<!-- LINKS -->', links.join('\n'),
-      '<!-- TRACK NAME ELSEWHERE -->', menu && menu.length ? menu.map(el => strip(up(el, 4) || el)).join('\n') : '(none)'].join('\n').slice(0, 200000);
+      '<!-- ADDRESS -->', location.pathname + location.search].join('\n').slice(0, 200000);
   };
   const copyButton = () => {
     const b = box.querySelector('#mc-copy');
@@ -1173,7 +1137,7 @@ function mejiroCapture(site, myTracks) {
     };
   };
 
-  const doneAll = (cards, failed) => {
+  const doneAll = (cards, failed, over) => {
     running = false;
     const all = cards.flatMap(c => c.races.flatMap(r => r.entrants));
     const found = all.filter(e => e.found).length;
@@ -1181,6 +1145,7 @@ function mejiroCapture(site, myTracks) {
       return `<b>${html(c.track)}</b>: ${c.races.length} race${c.races.length === 1 ? '' : 's'}, ${n.length} horse${n.length === 1 ? '' : 's'}` + (f < n.length ? ` <span style="color:#FF5C6C">(${n.length - f} without a record)</span>` : ''); });
     show(`<div>Read ${found} of ${all.length} records across ${cards.length} tracks.</div>` + note(list.join('<br>')) +
       (failed.length ? note(`<span style="color:#FF5C6C">Couldn't open: ${failed.map(html).join(', ')}</span>`) : '') +
+      (over.length ? note(`Already finished for the day: ${over.map(html).join(', ')}`) : '') +
       (cards.length ? sendLink : '') + button('mc-close', 'Close') +
       (failed.length ? note('If no track opened, copy the page outline and paste it to Claude.') + button('mc-copy', 'Copy page outline') : ''));
     box.querySelector('#mc-close').onclick = finish;
@@ -1228,34 +1193,38 @@ function mejiroCapture(site, myTracks) {
       copyButton();
       return;
     }
-    /* Ticked: your calendar's tracks (listed first) that still have races to run */
-    const ticked = t => !t.finished && (!myTracks || !myTracks.length || isMine(t.name));
-    tracks.sort((a, b) => ticked(b) - ticked(a));
+    /* Every track TwinSpires lists starts ticked */
     const label = 'display:flex;gap:8px;align-items:center;padding:2px 0;cursor:pointer';
-    show(`<div>Today's tracks on TwinSpires (${tracks.length}). Ticked: the ones on your Mejiro calendar with races left.</div>` +
+    show(`<div>Today's tracks on TwinSpires (${tracks.length}).</div>` +
       `<label style="${label};margin-top:8px;color:#C8B4FF"><input type="checkbox" id="mc-upcoming" checked> Only races that haven't run yet</label>` +
       `<div style="margin-top:6px;max-height:40vh;overflow:auto">` +
-      tracks.map((t, i) => `<label style="${label}"><input type="checkbox" data-i="${i}" ${ticked(t) ? 'checked' : ''}> ${html(t.name)}` +
+      tracks.map((t, i) => `<label style="${label}"><input type="checkbox" data-i="${i}" checked> ${html(t.name)}` +
         `<span style="margin-left:auto;font-size:12px;color:#9C92BC">${t.finished ? 'finished' : `R${t.race}${t.status ? ' · ' + html(t.status) : ''}`}</span></label>`).join('') + '</div>' +
-      button('mc-go', 'Capture ticked tracks', true) + button('mc-close', 'Close') +
+      button('mc-toggle', 'Deselect all') + '<br>' + button('mc-go', 'Capture ticked tracks', true) + button('mc-close', 'Close') +
       note('About a second per horse. Keep this tab on screen until it finishes: browsers slow down hidden tabs.'));
+    const boxes = [...box.querySelectorAll('input[data-i]')], toggle = box.querySelector('#mc-toggle');
+    const allOn = () => boxes.every(c => c.checked);
+    const syncToggle = () => { toggle.textContent = allOn() ? 'Deselect all' : 'Select all'; };
+    toggle.onclick = () => { const on = !allOn(); boxes.forEach(c => { c.checked = on; }); syncToggle(); };
+    boxes.forEach(c => { c.onchange = syncToggle; });
     box.querySelector('#mc-close').onclick = finish;
     box.querySelector('#mc-go').onclick = async () => {
-      const picked = [...box.querySelectorAll('input[data-i]:checked')].map(c => tracks[+c.dataset.i]);
+      const picked = boxes.filter(c => c.checked).map(c => tracks[+c.dataset.i]);
       const upcoming = box.querySelector('#mc-upcoming').checked;
       if (!picked.length) return;
       running = true;
-      const cards = [], failed = [];
+      const cards = [], failed = [], over = [];
       for (let i = 0; i < picked.length && !stop; i++) {
         const t = picked[i], prefix = `<b>${html(t.name)}</b> (track ${i + 1} of ${picked.length}) · `;
+        /* With "only races that haven't run yet", a finished card has nothing left to read */
+        if (upcoming && t.finished) { over.push(t.name); continue; }
         show(`${prefix}opening…`);
         if (!await openFromList(t)) { failed.push(t.name); continue; }
-        /* A finished card you ticked anyway is read in full */
-        const { races, total } = await readCard(prefix, upcoming && !t.finished ? t.race : 1);
+        const { races, total } = await readCard(prefix, upcoming ? t.race : 1);
         if (races.length) cards.push({ track: t.name, total, races });
         else failed.push(t.name);
       }
-      doneAll(cards, failed);
+      doneAll(cards, failed, over);
     };
   };
 
@@ -1354,37 +1323,6 @@ $('#strategyList').addEventListener('pointerdown', e => {
   handle.addEventListener('pointerup', end, { once: true });
   handle.addEventListener('pointercancel', end, { once: true });
 });
-
-/* =========================================================
-   Calendar data — calendar-data.js, generated by the calendar folder's Sync Calendar.bat.
-   Today's Races uses it for which tracks race today and their YouTube links (the "youtube"
-   column of calendar\data\tracks.csv); Log bets uses it for its track list.
-   ========================================================= */
-
-const CAL = window.MEJIRO_CALENDAR || { tracks: [], meets: [], race_days: [], events: [] };
-
-function parseDate(iso) {
-  const [y, m, d] = iso.split('-').map(Number);
-  return new Date(y, m - 1, d);
-}
-
-const activeTracks = () => CAL.tracks.filter(t => t.status === 'active');
-
-// Tracks with at least one race day on file (harness tracks that only publish season dates have none)
-const tracksWithRaceDays = new Set(CAL.race_days.map(d => d.track_code));
-
-// <option>s grouped by state
-function trackOptions(tracks) {
-  const byState = new Map();
-  tracks.forEach(t => {
-    if (!byState.has(t.state)) byState.set(t.state, []);
-    byState.get(t.state).push(t);
-  });
-  return [...byState.keys()].sort().map(st => `<optgroup label="${esc(st)}">${byState.get(st)
-    .sort((a, b) => a.name.localeCompare(b.name))
-    .map(t => `<option value="${esc(t.code)}">${esc(t.name)}</option>`)
-    .join('')}</optgroup>`).join('');
-}
 
 /* =========================================================
    Risk Matrix

@@ -189,10 +189,6 @@ input[type="date"] { color-scheme: dark; }
   color: var(--text); font: 13px var(--font); text-align: left; cursor: pointer;
 }
 .race-track .name { font-weight: 600; }
-/* YouTube channel: a link once tracks.csv has the track's "youtube" column filled in, greyed out until then */
-.yt-link { flex-shrink: 0; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 7px; color: #FF0033; }
-a.yt-link:hover { background: var(--surface); }
-.yt-link.off { color: var(--muted); opacity: .35; cursor: default; }
 .track-remove { flex-shrink: 0; width: 24px; height: 28px; border: 0; border-radius: 7px; background: none; color: var(--muted); cursor: pointer; }
 .track-remove:hover { background: var(--surface); color: var(--loss, #FF5C6C); }
 .scrape-all { width: 100%; margin-top: 14px; }

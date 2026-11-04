@@ -19,12 +19,12 @@ Firebase handles **Google sign-in** and the **database** (each account's bets an
 
 ## 4. Publish the website on Netlify
 
-1. Double-click **`Build Site.bat`**. It copies just the website files into a folder called **`site`**, leaving the calendar database and scripts out.
+1. Double-click **`Build Site.bat`**. It copies just the website files into a folder called **`site`**.
 2. Go to https://app.netlify.com/drop, sign up (free; without an account the site is deleted after an hour), and drag the **`site`** folder onto the page.
 3. Netlify gives the site an address like `https://something-random.netlify.app`. You can rename it under **Site configuration → Change site name**.
 4. Back in Firebase: **Authentication → Settings → Authorized domains → Add domain**, and enter that address without `https://` (e.g. `mejiro-assistant.netlify.app`). Sign-in won't work from the site until you do this.
 
-**To update the site later** (after changing code or the calendar): run `Build Site.bat` again, then in Netlify open your site → **Deploys**, and drag the new `site` folder onto the "Drag and drop" area.
+**To update the site later** (after changing code): run `Build Site.bat` again, then in Netlify open your site → **Deploys**, and drag the new `site` folder onto the "Drag and drop" area.
 
 ## Testing on your computer first (optional)
 
@@ -37,15 +37,12 @@ Browsers keep saved data separately per address, so the online site can't see wh
 1. Open `index.html` straight from disk. Under the sign-in button, click **Download data saved in this browser**.
 2. Sign in on the online site, then go to **Settings → Restore backup** and choose that file.
 
-## Updating the race calendar
-
-Run `calendar\Sync Calendar.bat` (needs Python), then `Build Site.bat`, and drag the new `site` folder onto Netlify.
-
 ## Where the data lives
 
 | Firestore path | Holds |
 |---|---|
-| `users/{uid}` | settings, Risk Matrix, Calendar and win-rate choices |
+| `users/{uid}` | settings, Risk Matrix, strategies and display choices |
 | `users/{uid}/bets/{betId}` | one document per bet |
+| `users/{uid}/racecards/{YYYY-MM-DD}` | that day's scraped tracks, races and horses |
 
 Firestore's free tier is far more than one person's betting log needs.
