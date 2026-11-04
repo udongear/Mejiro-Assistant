@@ -602,7 +602,7 @@ async function ensureCards(date) {
 function racesTracks(date) {
   const captured = state.cards && state.cards.date === date ? state.cards.tracks : {};
   const list = todaysTracks().map(t => ({ key: t.code, name: t.name, state: t.state }));
-  Object.entries(captured).forEach(([key, t]) => { if (!list.some(x => x.key === key)) list.push({ key, name: t.name, state: '' }); });
+  Object.entries(captured).forEach(([key, t]) => { if (!list.some(x => x.key === key)) list.push({ key, name: t.name, state: '', extra: true }); });
   return list.map(x => ({ ...x, card: captured[x.key] || null, youtube: (CAL.tracks.find(t => t.code === x.key) || {}).youtube }))
     .sort((a, b) => (!!b.card - !!a.card) || a.name.localeCompare(b.name));
 }
@@ -660,6 +660,7 @@ function renderRaces() {
           <span class="muted tiny">${n ? `${n} race${n === 1 ? '' : 's'}` : esc(x.state)}</span>
         </button>
         ${youtubeIcon(x.youtube)}
+        ${x.extra ? `<button type="button" class="track-remove" data-remove-track="${esc(x.key)}" title="Remove this track's captures" aria-label="Remove ${esc(x.name)}">✕</button>` : ''}
       </div>`;
   }).join('') || '<p class="muted small-text">No racing at active tracks today.</p>';
 
@@ -718,7 +719,16 @@ function renderRaces() {
       </div>`).join('')}</div>`;
 }
 
-$('#racesTracks').addEventListener('click', e => {
+$('#racesTracks').addEventListener('click', async e => {
+  // A captured track the calendar doesn't list (or a misread name) can be removed
+  const remove = e.target.closest('[data-remove-track]');
+  if (remove) {
+    const t = state.cards.tracks[remove.dataset.removeTrack];
+    if (!t || !await confirmModal(`Remove ${t.name}?`, "This deletes today's captured races for it.", 'Remove', true)) return;
+    delete state.cards.tracks[remove.dataset.removeTrack];
+    save();
+    return renderRaces();
+  }
   const b = e.target.closest('[data-key]');
   if (!b) return;
   racesView.key = b.dataset.key;
@@ -774,14 +784,32 @@ async function applyPendingCaptures() {
 // The bookmark reuses one Mejiro tab, so later captures arrive as a change of address
 window.addEventListener('hashchange', () => { takeCaptureFromAddress(); applyPendingCaptures(); });
 
-// A capture is one race ({ race, entrants }) or, from "All races", a whole card ({ races: [{ race, entrants }] })
+// A capture is one track: one race ({ race, entrants }) or, from "All races", its card ({ races: [{ race, entrants }] }).
+// "Every track" sends several: { tracks: [{ track, total, races }] }
 async function importCapture(c) {
+  const date = c && /^\d{4}-\d{2}-\d{2}$/.test(c.date) ? c.date : today();
+  const parts = !c ? [] : Array.isArray(c.tracks) ? c.tracks.map(t => ({ capturedAt: c.capturedAt, ...t })) : [c];
+  await ensureCards(date);
+  const saved = parts.map(mergeTrack).filter(Boolean);
+  if (!saved.length) return toast('That capture is missing its track, race number or horses.');
+  save();
+  if (date === today()) racesView = { date, key: saved[0].key, race: saved[0].numbers[0] };
+  goTab('races');
+  renderRaces();
+  const horses = saved.flatMap(s => s.horses);
+  const missing = horses.filter(e => e.starts == null).length;
+  const { name, numbers } = saved[0];
+  const what = saved.length > 1 ? `${saved.length} tracks, ${saved.reduce((n, s) => n + s.numbers.length, 0)} races`
+    : `${name} ` + (numbers.length === 1 ? `race ${numbers[0]}` : `races ${numbers[0]}–${numbers[numbers.length - 1]}`);
+  toast(`Captured ${what}: ${horses.length} horses` + (missing ? `, ${missing} without a record` : '') + (date === today() ? '' : ` (saved under ${date})`));
+}
+
+// Puts one track's capture into state.cards (already the capture's day); null if it's unusable
+function mergeTrack(c) {
   const int = v => Math.max(0, Math.floor(+v) || 0);
   const list = !c ? [] : Array.isArray(c.races) ? c.races : [{ race: c.race, entrants: c.entrants }];
   const races = list.filter(r => r && Array.isArray(r.entrants) && r.entrants.length && int(r.race) >= 1 && int(r.race) <= MAX_RACES);
-  if (!c || !c.track || !races.length) return toast('That capture is missing its track, race number or horses.');
-  const date = /^\d{4}-\d{2}-\d{2}$/.test(c.date) ? c.date : today();
-  await ensureCards(date);
+  if (!c || !c.track || !races.length) return null;
   const match = matchTrack(c.track);
   const key = match ? match.code : 'TS-' + normTrack(c.track);
   const prev = state.cards.tracks[key] || { races: {} };
@@ -802,15 +830,8 @@ async function importCapture(c) {
     total: int(c.total) || prev.total || null,
     races: { ...prev.races, ...cleaned },
   };
-  save();
-  const numbers = Object.keys(cleaned).map(Number).sort((a, b) => a - b);
-  if (date === today()) racesView = { date, key, race: numbers[0] };
-  goTab('races');
-  renderRaces();
-  const horses = Object.values(cleaned).flatMap(r => r.entrants);
-  const missing = horses.filter(e => e.starts == null).length;
-  toast(`Captured ${state.cards.tracks[key].name} ` + (numbers.length === 1 ? `race ${numbers[0]}` : `races ${numbers[0]}–${numbers[numbers.length - 1]}`) +
-    `: ${horses.length} horses` + (missing ? `, ${missing} without a record` : '') + (date === today() ? '' : ` (saved under ${date})`));
+  return { key, name: state.cards.tracks[key].name, numbers: Object.keys(cleaned).map(Number).sort((a, b) => a - b),
+    horses: Object.values(cleaned).flatMap(r => r.entrants) };
 }
 
 /* ----- Setting up the bookmark, and exporting everything captured ----- */
@@ -838,6 +859,25 @@ function openCaptureSetup() {
 }
 
 $('#setupCapture').addEventListener('click', openCaptureSetup);
+
+// The capture itself runs in the bookmark on TwinSpires (a site can't read another site's pages), so this explains the steps
+$('#scrapeAll').addEventListener('click', () => {
+  openModal(`
+    <h3>Scrape all tracks</h3>
+    <ol class="scrape-steps">
+      <li>Open TwinSpires and go to any track's <b>PROGRAM</b> (Advanced view).</li>
+      <li>Click your <b>Mejiro Capture</b> bookmark, then <b>Every track</b>. Untick any tracks you don't want.</li>
+      <li>Keep that tab on screen while it works, about a minute or two per track. Browsers slow down hidden tabs.</li>
+      <li>When it finishes, click <b>Send to Mejiro</b>. Every track lands here at once.</li>
+    </ol>
+    <div class="modal-actions">
+      <a class="btn primary" href="https://www.twinspires.com/" target="twinspires" rel="noopener">Open TwinSpires</a>
+      <button class="btn" id="scrapeSetup" type="button">Set up the bookmark</button>
+      <button class="btn ghost" id="scrapeClose" type="button">Close</button>
+    </div>`);
+  $('#scrapeSetup').onclick = openCaptureSetup;
+  $('#scrapeClose').onclick = closeModal;
+});
 $('#racesEntrants').addEventListener('click', e => { if (e.target.closest('[data-setup-capture]')) openCaptureSetup(); });
 
 // Every captured day in one CSV: one row per horse
@@ -879,7 +919,14 @@ function mejiroCapture(site) {
     'max-height:75vh;overflow:auto;padding:14px 16px;border-radius:12px;background:#0D0A14;color:#F1ECFF;text-align:left;' +
     'font:14px/1.45 system-ui,sans-serif;border:1px solid #7B61FF;box-shadow:0 10px 30px rgba(0,0,0,.5)';
   document.body.appendChild(box);
-  const show = inner => { box.innerHTML = '<div style="font-weight:700;color:#C8B4FF;margin-bottom:6px">Mejiro Capture</div>' + inner; };
+  /* While a long capture runs, every screen offers a way to stop early and keep what's read so far */
+  let running = false, stop = false;
+  const show = inner => {
+    box.innerHTML = '<div style="font-weight:700;color:#C8B4FF;margin-bottom:6px">Mejiro Capture</div>' + inner +
+      (running ? button('mc-stop', stop ? 'Stopping after this race…' : 'Stop and send what\'s done') : '');
+    const s = box.querySelector('#mc-stop');
+    if (s) s.onclick = () => { stop = true; s.textContent = 'Stopping after this race…'; };
+  };
   const button = (id, label, primary) => `<button id="${id}" type="button" style="margin:10px 6px 0 0;padding:8px 12px;` +
     `border-radius:8px;border:1px solid #7B61FF;background:${primary ? '#7B61FF' : 'transparent'};color:#fff;font:600 13px system-ui;cursor:pointer">${label}</button>`;
   const note = text => `<div style="margin-top:10px;font-size:12px;color:#9C92BC">${text}</div>`;
@@ -960,6 +1007,39 @@ function mejiroCapture(site) {
     return hit ? hit[1] : '';
   };
 
+  /* Today's tracks: links shaped like this page's address but with another track's name in it,
+     e.g. /bet/program/classic/parx-racing/prx/Thoroughbred/1/advanced next to .../finger-lakes/fl/... */
+  const slug = s => clean(s).toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  const trackLinks = () => {
+    const here = location.pathname.split('/').filter(Boolean), mine = slug(trackName());
+    const at = here.findIndex(s => { const x = slug(decodeURIComponent(s)); return mine && x.length > 2 && (x === mine || x.startsWith(mine) || mine.startsWith(x)); });
+    if (at < 0) return [];
+    const found = new Map([[here[at], { name: trackName(), path: location.pathname + location.search }]]);
+    document.querySelectorAll('a[href]').forEach(a => {
+      if (box.contains(a)) return;
+      let u;
+      try { u = new URL(a.href, location.href); } catch (e) { return; }
+      const p = u.pathname.split('/').filter(Boolean);
+      if (u.origin !== location.origin || p.length !== here.length || p.slice(0, at).join('/') !== here.slice(0, at).join('/') || found.has(p[at])) return;
+      found.set(p[at], { name: decodeURIComponent(p[at]).replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()), path: u.pathname + u.search });
+    });
+    return [...found.values()];
+  };
+
+  /* Switch tracks inside the page (as its own links do), so this panel keeps running; wait for the new program */
+  const openTrack = async t => {
+    if (location.pathname + location.search === t.path && findRunners()) return true;
+    const before = trackName();
+    history.pushState(null, '', t.path);
+    window.dispatchEvent(new PopStateEvent('popstate', { state: null }));
+    for (let i = 0; i < 100; i++) {
+      await sleep(200);
+      const r = findRunners();
+      if (trackName() && trackName() !== before && r && r.length && raceNow()) { await sleep(800); return true; }
+    }
+    return false;
+  };
+
   /* Three parts: the runner list, an open LIFE panel if any, and the short texts near the top of the page */
   const outline = () => {
     const strip = root => {
@@ -976,9 +1056,17 @@ function mejiroCapture(site) {
     const top = leaves().filter(el => { const r = el.getBoundingClientRect(); return r.top < 320 && r.height > 0; })
       .map(el => `${el.tagName.toLowerCase()}.${typeof el.className === 'string' ? el.className.trim().replace(/\s+/g, '.') : ''}: ${clean(el.textContent)}`)
       .filter(t => !/:\s*$/.test(t)).slice(0, 120);
+    /* For "Every track": the page's links, and wherever else the track's name appears (a track menu lists it too) */
+    const links = [...document.querySelectorAll('a[href]')].filter(a => !box.contains(a))
+      .map(a => `${a.getAttribute('href')}  ${clean(a.textContent).slice(0, 60)}`).slice(0, 200);
+    const name = trackName();
+    const menu = name && leaves().filter(el => clean(el.textContent) === name && !el.closest('.track-name')).slice(0, 2);
     return ['<!-- RUNNER LIST -->', anchor ? strip(up(anchor, 2) || anchor) : '(not found)',
       '<!-- LIFE PANEL -->', life ? strip(up(life, 8) || life) : '(no "LIFE" text on the page: open a horse\'s record by hand first)',
-      '<!-- TOP OF PAGE -->', top.join('\n')].join('\n').slice(0, 150000);
+      '<!-- TOP OF PAGE -->', top.join('\n'),
+      '<!-- ADDRESS -->', location.pathname + location.search,
+      '<!-- LINKS -->', links.join('\n'),
+      '<!-- TRACK NAME ELSEWHERE -->', menu && menu.length ? menu.map(el => strip(up(el, 4) || el)).join('\n') : '(none)'].join('\n').slice(0, 200000);
   };
   const copyButton = () => {
     const b = box.querySelector('#mc-copy');
@@ -1021,7 +1109,60 @@ function mejiroCapture(site) {
     return raceNow() === n;
   };
 
+  /* Every race on the track that's showing: back to Race 1, then forward until there's no next-race button */
+  const readCard = async prefix => {
+    const races = [];
+    let n = raceNow() || 1;
+    while (n > 1) {
+      show(`${prefix}Going back to Race ${n - 1}…`);
+      if (!await goTo(n - 1)) break;
+      n = raceNow();
+    }
+    let total = null;
+    while (races.length < 15) {
+      const entrants = await readRace(`${prefix}Race ${n}: `);
+      if (entrants) races.push({ race: n, entrants });
+      if (!raceButton(n + 1)) { total = n; break; }  /* no next-race button: this is the last race */
+      if (stop) break;
+      show(`${prefix}Opening Race ${n + 1}…`);
+      if (!await goTo(n + 1)) break;
+      n = raceNow();
+      if (races.some(r => r.race === n)) break;
+    }
+    return { races, total };
+  };
+
+  /* "Send to Mejiro" opens the site with the capture in the address (after the #, so it never leaves your browser) */
+  const sendLink = `<a id="mc-send" href="#" target="mejiro" style="display:inline-block;margin:10px 6px 0 0;padding:8px 12px;border-radius:8px;` +
+    `background:#7B61FF;color:#fff;font:600 13px system-ui;text-decoration:none">Send to Mejiro</a>`;
+  const wireSend = payload => {
+    const send = box.querySelector('#mc-send');
+    send.onclick = () => {
+      const p = payload();
+      if (!p) return false;
+      const now = new Date(), date = new Date(now - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+      send.href = site + '#capture=' + encodeURIComponent(JSON.stringify({ v: 3, source: 'twinspires', date, capturedAt: now.toISOString(), ...p }));
+      setTimeout(finish, 500);
+    };
+  };
+
+  const doneAll = (cards, failed) => {
+    running = false;
+    const all = cards.flatMap(c => c.races.flatMap(r => r.entrants));
+    const found = all.filter(e => e.found).length;
+    const list = cards.map(c => { const n = c.races.flatMap(r => r.entrants), f = n.filter(e => e.found).length;
+      return `<b>${html(c.track)}</b>: ${c.races.length} race${c.races.length === 1 ? '' : 's'}, ${n.length} horses` + (f < n.length ? ` <span style="color:#FF5C6C">(${n.length - f} without a record)</span>` : ''); });
+    show(`<div>Read ${found} of ${all.length} records across ${cards.length} tracks.</div>` + note(list.join('<br>')) +
+      (failed.length ? note(`<span style="color:#FF5C6C">Couldn't open: ${failed.map(html).join(', ')}</span>`) : '') +
+      (cards.length ? sendLink : '') + button('mc-close', 'Close') +
+      (failed.length ? note('If no track opened, copy the page outline and paste it to Claude.') + button('mc-copy', 'Copy page outline') : ''));
+    box.querySelector('#mc-close').onclick = finish;
+    copyButton();
+    if (cards.length) wireSend(() => ({ tracks: cards }));
+  };
+
   const done = (races, track, total) => {
+    running = false;
     const all = races.flatMap(r => r.entrants);
     const found = all.filter(e => e.found).length;
     const single = races.length === 1;
@@ -1033,23 +1174,17 @@ function mejiroCapture(site) {
     show(`<div>Read ${found} of ${all.length} records${single ? '' : ` across ${races.length} races`}.</div>` +
       `<label style="display:block;margin-top:10px;font-size:12px;color:#9C92BC">Track<input id="mc-track" style="${field}" value="${html(track)}"></label>` +
       (single ? `<label style="display:block;margin-top:8px;font-size:12px;color:#9C92BC">Race<input id="mc-race" type="number" min="1" max="15" style="${field}" value="${races[0].race || ''}"></label>` : '') +
-      note(list) +
-      `<a id="mc-send" href="#" target="mejiro" style="display:inline-block;margin:10px 6px 0 0;padding:8px 12px;border-radius:8px;` +
-      `background:#7B61FF;color:#fff;font:600 13px system-ui;text-decoration:none">Send to Mejiro</a>` + button('mc-close', 'Close') +
+      note(list) + sendLink + button('mc-close', 'Close') +
       (found < all.length ? note('Records missing? Open one horse\'s record by hand (click its name), then copy the page outline and paste it to Claude.') + button('mc-copy', 'Copy page outline') : ''));
     box.querySelector('#mc-close').onclick = finish;
     copyButton();
-    const send = box.querySelector('#mc-send');
-    send.onclick = () => {
+    wireSend(() => {
       const name = clean(box.querySelector('#mc-track').value);
       const raceField = box.querySelector('#mc-race');
       if (raceField) races[0].race = +raceField.value;
-      if (!name || races.some(r => !(r.race >= 1 && r.race <= 15))) { alert('Enter the track and a race number from 1 to 15.'); return false; }
-      const now = new Date(), date = new Date(now - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
-      send.href = site + '#capture=' + encodeURIComponent(JSON.stringify(
-        { v: 2, source: 'twinspires', date, track: name, total, capturedAt: now.toISOString(), races }));
-      setTimeout(finish, 500);
-    };
+      if (!name || races.some(r => !(r.race >= 1 && r.race <= 15))) { alert('Enter the track and a race number from 1 to 15.'); return null; }
+      return { track: name, total, races };
+    });
   };
 
   const first = findRunners();
@@ -1062,33 +1197,55 @@ function mejiroCapture(site) {
   }
   const track = trackName(), start = raceNow();
   show(`<div><b>${html(track) || 'This track'}</b>${start ? ` · Race ${start}` : ''}: ${first.length} runners.</div>` +
-    button('mc-one', 'This race', true) + button('mc-all', 'All races') + button('mc-close', 'Close') +
-    note('<b>All races</b> goes back to Race 1, then reads every race on the card (about a second per horse). Leave this tab open while it works.'));
+    button('mc-one', 'This race', true) + button('mc-all', 'All races') + button('mc-every', 'Every track') + button('mc-close', 'Close') +
+    note('<b>All races</b> goes back to Race 1, then reads every race on the card (about a second per horse). ' +
+      '<b>Every track</b> does that for each of today\'s tracks. Keep this tab on screen while it works: browsers slow down tabs that are hidden.'));
   box.querySelector('#mc-close').onclick = finish;
   box.querySelector('#mc-one').onclick = async () => {
     const entrants = await readRace('');
     done([{ race: start, entrants: entrants || [] }], track, null);
   };
   box.querySelector('#mc-all').onclick = async () => {
-    const races = [];
-    let n = raceNow() || 1;
-    while (n > 1) {
-      show(`Going back to Race ${n - 1}…`);
-      if (!await goTo(n - 1)) break;
-      n = raceNow();
-    }
-    let total = null;
-    while (races.length < 15) {
-      const entrants = await readRace(`Race ${n}: `);
-      if (entrants) races.push({ race: n, entrants });
-      if (!raceButton(n + 1)) { total = n; break; }  /* no next-race button: this is the last race */
-      show(`Opening Race ${n + 1}…`);
-      if (!await goTo(n + 1)) break;
-      n = raceNow();
-      if (races.some(r => r.race === n)) break;
-    }
+    running = true;
+    const { races, total } = await readCard('');
     done(races, track, total);
   };
+  const chooseTracks = () => {
+    const tracks = trackLinks();
+    if (tracks.length < 2) {
+      show("Couldn't find TwinSpires' list of today's tracks on this page. If there's a track menu or list, open it, then press <b>Look again</b>." +
+        button('mc-again', 'Look again', true) + button('mc-copy', 'Copy page outline') + button('mc-close', 'Close') +
+        note('Still nothing? Copy the page outline (with the track menu open) and paste it to Claude.'));
+      box.querySelector('#mc-again').onclick = chooseTracks;
+      box.querySelector('#mc-close').onclick = finish;
+      copyButton();
+      return;
+    }
+    /* Harness and greyhound cards start unticked */
+    show(`<div>Today's tracks on TwinSpires (${tracks.length}):</div><div style="margin-top:8px;max-height:40vh;overflow:auto">` +
+      tracks.map((t, i) => `<label style="display:flex;gap:8px;align-items:center;padding:2px 0;cursor:pointer">` +
+        `<input type="checkbox" data-i="${i}" ${/harness|greyhound/i.test(t.path) ? '' : 'checked'}> ${html(t.name)}</label>`).join('') + '</div>' +
+      button('mc-go', 'Capture ticked tracks', true) + button('mc-close', 'Close') +
+      note('About a minute or two per track. Keep this tab on screen until it finishes.'));
+    box.querySelector('#mc-close').onclick = finish;
+    box.querySelector('#mc-go').onclick = async () => {
+      const picked = [...box.querySelectorAll('input[data-i]:checked')].map(c => tracks[+c.dataset.i]);
+      if (!picked.length) return;
+      running = true;
+      const cards = [], failed = [];
+      for (let i = 0; i < picked.length && !stop; i++) {
+        const t = picked[i];
+        show(`<b>${html(t.name)}</b> (track ${i + 1} of ${picked.length}): opening…`);
+        if (!await openTrack(t)) { failed.push(t.name); continue; }
+        const name = trackName() || t.name;
+        const { races, total } = await readCard(`<b>${html(name)}</b> (track ${i + 1} of ${picked.length}) · `);
+        if (races.length) cards.push({ track: name, total, races });
+        else failed.push(name);
+      }
+      doneAll(cards, failed);
+    };
+  };
+  box.querySelector('#mc-every').onclick = chooseTracks;
 }
 
 /* =========================================================

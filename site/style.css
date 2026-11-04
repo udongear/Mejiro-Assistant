@@ -193,6 +193,11 @@ input[type="date"] { color-scheme: dark; }
 .yt-link { flex-shrink: 0; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 7px; color: #FF0033; }
 a.yt-link:hover { background: var(--surface); }
 .yt-link.off { color: var(--muted); opacity: .35; cursor: default; }
+.track-remove { flex-shrink: 0; width: 24px; height: 28px; border: 0; border-radius: 7px; background: none; color: var(--muted); cursor: pointer; }
+.track-remove:hover { background: var(--surface); color: var(--loss, #FF5C6C); }
+.scrape-all { width: 100%; margin-top: 14px; }
+.scrape-steps { margin: 0 0 4px; padding-left: 20px; line-height: 1.55; }
+.scrape-steps li { margin: 4px 0; }
 .race-picker { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 12px; }
 .race-picker .seg { min-width: 34px; padding: 6px 8px; background: var(--surface-2); }
 .race-picker .seg.active { background: var(--lavender); }
