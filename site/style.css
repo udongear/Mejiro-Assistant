@@ -180,22 +180,35 @@ input[type="date"] { color-scheme: dark; }
 .races-layout { display: grid; grid-template-columns: minmax(200px, 240px) minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
 .races-layout > .card { margin-bottom: 0; }
 .races-tracks { display: flex; flex-direction: column; gap: 4px; }
+.race-track-row { display: flex; align-items: center; gap: 2px; border: 1px solid transparent; border-radius: 8px; padding-right: 4px; }
+.race-track-row:hover { background: var(--surface-2); }
+.race-track-row.active { background: rgba(123, 97, 255, .2); border-color: var(--violet); }
 .race-track {
-  display: flex; justify-content: space-between; align-items: baseline; gap: 8px; width: 100%;
-  padding: 9px 10px; border: 1px solid transparent; border-radius: 8px; background: none;
+  flex: 1; min-width: 0; display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+  padding: 9px 6px 9px 10px; border: 0; background: none;
   color: var(--text); font: 13px var(--font); text-align: left; cursor: pointer;
 }
-.race-track:hover { background: var(--surface-2); }
-.race-track.active { background: rgba(123, 97, 255, .2); border-color: var(--violet); }
 .race-track .name { font-weight: 600; }
+/* YouTube channel: a link once tracks.csv has the track's "youtube" column filled in, greyed out until then */
+.yt-link { flex-shrink: 0; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 7px; color: #FF0033; }
+a.yt-link:hover { background: var(--surface); }
+.yt-link.off { color: var(--muted); opacity: .35; cursor: default; }
 .race-picker { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 12px; }
 .race-picker .seg { min-width: 34px; padding: 6px 8px; background: var(--surface-2); }
 .race-picker .seg.active { background: var(--lavender); }
 .race-picker .seg:disabled { opacity: .3; cursor: not-allowed; }
+/* Captured races get a dot */
+.race-picker .seg.has-data { position: relative; color: var(--text); }
+.race-picker .seg.has-data::after { content: ''; position: absolute; top: 3px; right: 3px; width: 5px; height: 5px; border-radius: 50%; background: var(--profit); }
+.capture-steps { padding: 12px 14px; border-radius: 10px; border: 1px dashed var(--border); font-size: 13px; }
+.capture-steps p { margin: 0 0 6px; }
+.capture-steps ol { margin: 0 0 12px; padding-left: 20px; color: var(--muted); }
+.capture-steps li { margin: 3px 0; }
+.captured-at { margin: 0 0 8px; }
+#tab-races h2 .small-text { font: 400 13px var(--font); margin-left: 8px; }
 .wps-toggle { display: flex; gap: 4px; margin-bottom: 12px; }
 .wps-toggle .seg { flex: 1; padding: 7px 8px; background: var(--surface-2); }
 .wps-toggle .seg.active { background: var(--lavender); }
-.placeholder-note { margin: 0 0 10px; padding: 8px 10px; border-radius: 8px; border: 1px dashed var(--border); color: var(--muted); font-size: 12px; }
 .calc-list { display: flex; flex-direction: column; gap: 8px; }
 .calc-item { padding: 10px 12px; border-radius: 10px; background: var(--surface-2); }
 .calc-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 6px; }
@@ -204,7 +217,7 @@ input[type="date"] { color-scheme: dark; }
 /* Scratched horses stay listed, greyed out */
 .badge.scr { background: var(--surface); color: var(--muted); border: 1px solid var(--border); }
 .table tr.scratched td, .calc-item.scratched b { color: var(--muted); }
-/* Green = highest in the race for that rate; yellow = above 50% */
+/* Green = highest in the race for that rate; yellow = 50% or more */
 .calc-row .best { color: var(--profit); font-weight: 700; }
 .calc-row .strong { color: #FFD84D; font-weight: 600; }
 @media (max-width: 1100px) {
@@ -240,57 +253,6 @@ input[type="date"] { color-scheme: dark; }
 .table input:disabled { opacity: .35; }
 .bet-actions { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
 
-/* Calendar tab */
-.cal-toolbar { justify-content: space-between; align-items: flex-end; }
-.toolbar .track-picker { width: 320px; max-width: 100%; }
-.track-pick-row { display: flex; align-items: flex-end; gap: 16px; flex-wrap: wrap; }
-.track-pick-row label.check { width: auto; padding-bottom: 10px; }
-.legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); padding-bottom: 8px; }
-.legend span { display: inline-flex; align-items: center; gap: 6px; }
-.swatch { position: relative; display: inline-block; width: 12px; height: 12px; border-radius: 4px; }
-
-.track-card { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
-.track-card h3 { font: 600 20px var(--display); color: var(--lavender); margin-bottom: 4px; }
-.track-card p { margin: 0; }
-.track-card p + p { margin-top: 8px; color: var(--pink); }
-.track-facts { display: flex; gap: 28px; flex-wrap: wrap; }
-.track-facts div { display: flex; flex-direction: column; gap: 2px; }
-.track-facts .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
-.track-facts b { font: 600 17px var(--display); }
-.track-facts small { color: var(--muted); font-size: 12px; }
-
-.cal-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px; margin-bottom: 16px; }
-.month { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; }
-.month h4 { display: flex; align-items: baseline; gap: 6px; margin: 0 0 10px; font: 600 15px var(--display); color: var(--lavender); }
-.month h4 .year { color: var(--muted); font-weight: 500; }
-.month h4 .tiny { margin-left: auto; white-space: nowrap; }
-.month.off h4 { color: var(--muted); }
-.month-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px; }
-.dow { text-align: center; font-size: 10px; color: var(--muted); padding-bottom: 4px; }
-.day {
-  position: relative; display: grid; place-items: center; aspect-ratio: 1; min-width: 0;
-  border: 1.5px solid transparent; border-radius: 7px; color: var(--muted);
-  font: 500 12px var(--font); font-variant-numeric: tabular-nums;
-}
-.day.race { font-weight: 700; cursor: default; }
-
-/* Day status: how sure the date is */
-.s-confirmed { background: var(--cyan); color: var(--black); }
-.s-scheduled { background: var(--violet); color: #fff; }
-.s-estimated { background: rgba(200, 180, 255, .16); border: 1.5px dashed var(--lavender); color: var(--lavender); }
-.s-cancelled { color: var(--loss); text-decoration: line-through; border: 1.5px solid rgba(255, 92, 108, .45); }
-.day.range, .swatch.range { background: rgba(200, 180, 255, .1); color: var(--text); }
-.swatch.s-estimated, .swatch.s-cancelled { border-width: 1.5px; }
-/* Featured race (Derby, Breeders' Cup...): pink corner dot */
-.day.featured::after, .swatch.featured::after {
-  content: ''; position: absolute; top: -2px; right: -2px; width: 7px; height: 7px;
-  border-radius: 50%; background: var(--pink); box-shadow: 0 0 0 2px var(--surface);
-}
-.swatch.featured { background: var(--surface-2); }
-
-.day.past { opacity: .4; }
-.day.today { outline: 2px solid var(--text); outline-offset: 1px; }
-code { font-size: 12px; color: var(--lavender); word-break: break-all; }
 
 /* ---------- Tables ---------- */
 .table-wrap { overflow-x: auto; }
@@ -347,15 +309,6 @@ code { font-size: 12px; color: var(--lavender); word-break: break-all; }
 .settings-actions { display: flex; justify-content: flex-end; margin-bottom: 16px; }
 
 /* ---------- Responsive ---------- */
-/* Wide screens (incl. 1920px displays at 125% scaling): two rows of 6 months */
-@media (min-width: 1400px) {
-  .cal-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
-  .month { padding: 10px 10px 12px; }
-  .month h4 { font-size: 14px; margin-bottom: 6px; }
-  .month-grid { gap: 2px; }
-  .day { font-size: 11px; }
-  .dow { font-size: 9px; padding-bottom: 2px; }
-}
 @media (max-width: 720px) {
   .app { flex-direction: column; }
   .sidebar {

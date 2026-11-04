@@ -12,8 +12,6 @@ const DEFAULT_MATRIX = [
   [500, 5], [1000, 3.33], [10000, 1], [25000, 0.66], [50000, 0.5], [100000, 0.33],
 ].map(([size, pct]) => ({ size, pct }));
 
-// The Calendar opens on the first of these (Emerald Downs, Keeneland, Los Alamitos) until you pick a track
-const HOME_TRACKS = ['EMD', 'KEE', 'LRC'];
 
 const DEFAULT_SETTINGS = {
   startingBankroll: 100,
@@ -29,7 +27,6 @@ function freshState() {
   return {
     user: null,
     bets: [],
-    calTrack: null,
     strategies: [],  // { id, text }, in display order
     matrix: DEFAULT_MATRIX.map(t => ({ ...t })),
     settings: { ...DEFAULT_SETTINGS },
@@ -48,14 +45,15 @@ function readLocalState() {
 }
 
 /* ---------- Cloud storage (Firestore) ----------
-   users/{uid}               the PREF_KEYS below
-   users/{uid}/bets/{betId}  one document per bet
+   users/{uid}                     the PREF_KEYS below
+   users/{uid}/bets/{betId}        one document per bet
+   users/{uid}/racecards/{date}    that day's races captured from TwinSpires (state.cards holds one day)
    save() is called after every change; it writes only what differs from the last sync. */
 
-const PREF_KEYS = ['settings', 'matrix', 'calTrack', 'calHideInactive', 'calHideNoDays', 'wrRange', 'strategies', 'wpsShown'];
+const PREF_KEYS = ['settings', 'matrix', 'wrRange', 'strategies', 'wpsShown'];
 
 let fb = null;  // { auth, db } once Firebase is set up
-let synced = { prefs: '', bets: new Map() };  // last known Firestore copy (bet id → JSON)
+let synced = { prefs: '', bets: new Map(), cards: '' };  // last known Firestore copy (bet id → JSON)
 let saveTimer = null;
 
 const userDoc = () => fb.db.collection('users').doc(state.user.uid);
@@ -63,6 +61,7 @@ const prefsOf = s => Object.fromEntries(PREF_KEYS.filter(k => s[k] !== undefined
 const snapshot = () => ({
   prefs: JSON.stringify(prefsOf(state)),
   bets: new Map(state.bets.map(b => [b.id, JSON.stringify(b)])),
+  cards: state.cards ? JSON.stringify(state.cards) : '',
 });
 
 function save() {
@@ -81,6 +80,10 @@ async function flushSave() {
   if (now.prefs !== synced.prefs) ops.push(batch => batch.set(userDoc(), JSON.parse(now.prefs)));
   now.bets.forEach((json, id) => { if (synced.bets.get(id) !== json) ops.push(batch => batch.set(bets.doc(id), JSON.parse(json))); });
   synced.bets.forEach((_, id) => { if (!now.bets.has(id)) ops.push(batch => batch.delete(bets.doc(id))); });
+  if (now.cards && now.cards !== synced.cards) {
+    const cards = JSON.parse(now.cards);
+    ops.push(batch => batch.set(userDoc().collection('racecards').doc(cards.date), cards));
+  }
   if (!ops.length) return;
   try {
     // A batch holds at most 500 writes
@@ -101,8 +104,9 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) flush
 
 async function loadAccount(user) {
   const ref = fb.db.collection('users').doc(user.uid);
-  const [doc, bets] = await Promise.all([ref.get(), ref.collection('bets').get()]);
+  const [doc, bets, cards] = await Promise.all([ref.get(), ref.collection('bets').get(), ref.collection('racecards').doc(today()).get()]);
   state = freshState();
+  state.cards = cards.exists ? cards.data() : { date: today(), tracks: {} };
   state.user = { uid: user.uid, name: user.displayName || user.email, email: user.email, photo: user.photoURL };
   if (doc.exists) {
     const data = doc.data();
@@ -253,6 +257,7 @@ function showLogin(error = '') {
 function showApp() {
   showScreen('#app');
   renderAll();
+  applyPendingCaptures();
 }
 
 function initFirebase() {
@@ -272,7 +277,7 @@ function initFirebase() {
   fb.auth.onAuthStateChanged(async user => {
     if (!user) {
       state = freshState();
-      synced = { prefs: '', bets: new Map() };
+      synced = { prefs: '', bets: new Map(), cards: '' };
       return showLogin();
     }
     showScreen('#loading');
@@ -338,7 +343,6 @@ function renderAll() {
   renderTracker();
   renderRaces();
   renderStrategies();
-  renderCalendarTab();
   renderMatrix();
   renderHistory();
   renderSettings();
@@ -356,7 +360,7 @@ function renderUser() {
 function renderTrackSelects() {
   // Log bets: the Calendar's active tracks, by code
   const bet = $('#betForm').track, bv = bet.value;
-  bet.innerHTML = '<option value="">Select track…</option>' + trackOptions(withRaceDays(activeTracks()));
+  bet.innerHTML = '<option value="">Select track…</option>' + trackOptions(activeTracks().filter(t => tracksWithRaceDays.has(t.code)));
   bet.value = bv;
 
   // History filters by the tracks you've actually bet on
@@ -545,13 +549,17 @@ function settleBet(bet, status, payout) {
 }
 
 /* =========================================================
-   Today's Races — pick a track, then a race: entrants in the middle,
-   win/place/show percentages on the right
+   Today's Races — race cards captured from TwinSpires with the Mejiro Capture bookmark.
+   Pick a track, then a race: entrants in the middle, win/place/show % on the right.
+   Each day's captures are one Firestore document, users/{uid}/racecards/{YYYY-MM-DD}:
+     { date, tracks: { KEY: { name, code, total, races: { "N": { capturedAt, entrants: [...] } } } } }
+   KEY is the calendar's track code, or "TS-<name>" for a track the calendar doesn't list.
    ========================================================= */
 
 const MAX_RACES = 15;
 const WPS = [['win', 'WIN'], ['place', 'PLACE'], ['show', 'SHOW']];
-let racesView = { date: null, code: null, race: 1 };
+let racesView = { date: null, key: null, race: 1 };
+let cardsLoading = false;
 
 // Active tracks with a race day today, A–Z
 function todaysTracks() {
@@ -563,33 +571,48 @@ function todaysTracks() {
   return CAL.tracks.filter(x => codes.has(x.code)).sort((a, b) => a.name.localeCompare(b.name));
 }
 
-// Entrants for one race: { pp, horse, starts, wins, places, shows, scratched }, where wins/places/shows
-// count 1st/2nd/3rd-place finishes and scratched is true for horses pulled from the race. Real race cards will come from window.MEJIRO_RACECARDS["CODE|YYYY-MM-DD"][race];
-// until that exists, every race gets a placeholder field (the same one each time it's opened).
-const seededRandom = key => {
-  let seed = [...key].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
-  return n => { seed = (seed * 1103515245 + 12345) >>> 0; return (seed >>> 8) % n; };
-};
+// TwinSpires and the calendar name tracks differently ("FINGER LAKES" vs "Finger Lakes Gaming & Racetrack"),
+// so compare without the generic words
+const normTrack = s => String(s || '').toLowerCase()
+  .replace(/race ?course|race ?track|raceway|racing|gaming|casino|resort|park|downs|the\b|[^a-z]/g, '');
 
-// How many races a track runs that day: the highest race in its card, or 8–12 for placeholder cards
-function raceCount(code, date) {
-  const card = window.MEJIRO_RACECARDS?.[`${code}|${date}`];
-  if (card) return Math.min(MAX_RACES, Math.max(0, ...Object.keys(card).map(Number)));
-  return 8 + seededRandom(`${code}${date}`)(5);
+function matchTrack(name) {
+  const n = normTrack(name);
+  if (n.length < 3) return null;
+  const fits = t => { const m = normTrack(t.name); return m.length >= 3 && (m.includes(n) || n.includes(m)); };
+  return todaysTracks().find(fits) || CAL.tracks.find(fits) || null;
 }
 
-function raceEntrants(code, date, race) {
-  const real = window.MEJIRO_RACECARDS?.[`${code}|${date}`]?.[race];
-  if (real) return { entrants: real, placeholder: false };
-  const rand = seededRandom(`${code}${date}${race}`);
-  const entrants = Array.from({ length: 6 + rand(5) }, (_, i) => {
-    const starts = rand(5) ? 1 + rand(40) : 0;
-    const wins = starts ? rand(Math.ceil(starts * 0.35) + 1) : 0;
-    const places = starts ? Math.min(starts - wins, rand(Math.ceil(starts * 0.25) + 1)) : 0;
-    const shows = starts ? Math.min(starts - wins - places, rand(Math.ceil(starts * 0.2) + 1)) : 0;
-    return { pp: i + 1, horse: `Entrant ${i + 1}`, starts, wins, places, shows, scratched: !rand(9) };
-  });
-  return { entrants, placeholder: true };
+// Makes state.cards the given day's captures (today's arrive with the account)
+async function ensureCards(date) {
+  if (state.cards && state.cards.date === date) return;
+  await flushSave();  // the previous day's captures first
+  let data = null;
+  if (fb && state.user) {
+    try {
+      const d = await userDoc().collection('racecards').doc(date).get();
+      if (d.exists) data = d.data();
+    } catch (err) { console.error(err); }
+  }
+  state.cards = data || { date, tracks: {} };
+  synced.cards = JSON.stringify(state.cards);
+}
+
+// Left column: today's calendar tracks plus any captured track the calendar doesn't list; captured first
+function racesTracks(date) {
+  const captured = state.cards && state.cards.date === date ? state.cards.tracks : {};
+  const list = todaysTracks().map(t => ({ key: t.code, name: t.name, state: t.state }));
+  Object.entries(captured).forEach(([key, t]) => { if (!list.some(x => x.key === key)) list.push({ key, name: t.name, state: '' }); });
+  return list.map(x => ({ ...x, card: captured[x.key] || null, youtube: (CAL.tracks.find(t => t.code === x.key) || {}).youtube }))
+    .sort((a, b) => (!!b.card - !!a.card) || a.name.localeCompare(b.name));
+}
+
+// Links to the track's channel once calendar\data\tracks.csv has its "youtube" column filled in; greyed out until then
+const YT_SVG = '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><rect x="1" y="4" width="22" height="16" rx="5" fill="currentColor"/><path d="M10 8.5v7l6-3.5z" fill="#fff"/></svg>';
+function youtubeIcon(url) {
+  return url
+    ? `<a class="yt-link" href="${esc(url)}" target="_blank" rel="noopener" title="YouTube channel" aria-label="YouTube channel">${YT_SVG}</a>`
+    : `<span class="yt-link off" title="No YouTube channel added yet">${YT_SVG}</span>`;
 }
 
 // WIN = 1st ÷ starts, PLACE = (1st + 2nd) ÷ starts, SHOW = (1st + 2nd + 3rd) ÷ starts
@@ -599,21 +622,48 @@ function wpsPercents(e) {
   return { win: pct(e.wins), place: pct(e.wins + e.places), show: pct(e.wins + e.places + e.shows) };
 }
 const fmtPct = v => +v.toFixed(1) + '%';
-const lifeLine = e => `${e.starts}-${e.wins}-${e.places}-${e.shows}`;
+// starts is missing when the capture couldn't read that horse's record, and 0 for a debut
+const lifeText = e => e.starts == null ? 'No record found' : e.starts ? `${e.starts}-${e.wins}-${e.places}-${e.shows}` : 'Debut';
+
+// Which of WIN / PLACE / SHOW the right column shows; SHOW alone until you change it
+const wpsShown = () => (Array.isArray(state.wpsShown) && state.wpsShown.length ? state.wpsShown : ['show']);
+const wpsToggle = () => `<div class="wps-toggle" role="group" aria-label="Rates to show">${WPS.map(([k, label]) =>
+  `<button type="button" class="seg ${wpsShown().includes(k) ? 'active' : ''}" data-wps="${k}" aria-pressed="${wpsShown().includes(k)}">${label}</button>`).join('')}</div>`;
+
+function captureSteps(trackName, race) {
+  return `<div class="capture-steps">
+    <p><b>Race ${race} isn't captured yet.</b></p>
+    <ol>
+      <li>On TwinSpires, open ${esc(trackName)} Race ${race} on the <b>PROGRAM</b> tab.</li>
+      <li>Click your <b>Mejiro Capture</b> bookmark. It opens each horse and reads its record.</li>
+      <li>Click <b>Send to Mejiro</b>.</li>
+    </ol>
+    <button type="button" class="btn tiny-btn" data-setup-capture>Set up the Mejiro Capture bookmark</button>
+  </div>`;
+}
 
 function renderRaces() {
   const t = today();
-  const tracks = todaysTracks();
-  if (racesView.date !== t || !tracks.some(x => x.code === racesView.code)) {
-    racesView = { date: t, code: tracks[0]?.code || null, race: 1 };
+  if (!state.cards || state.cards.date !== t) {
+    // Past midnight, or after importing another day: switch to today's captures, then draw again
+    if (!cardsLoading) { cardsLoading = true; ensureCards(t).finally(() => { cardsLoading = false; renderRaces(); }); }
   }
+  const tracks = racesTracks(t);
+  if (racesView.date !== t || !tracks.some(x => x.key === racesView.key)) racesView = { date: t, key: tracks[0]?.key || null, race: 1 };
   $('#racesDate').textContent = parseDate(t).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
-  $('#racesTracks').innerHTML = tracks.map(x => `
-    <button type="button" class="race-track ${x.code === racesView.code ? 'active' : ''}" data-code="${esc(x.code)}">
-      <span class="name">${esc(x.name)}</span><span class="muted tiny">${esc(x.state)}</span>
-    </button>`).join('') || '<p class="muted small-text">No racing at active tracks today.</p>';
+  $('#racesTracks').innerHTML = tracks.map(x => {
+    const n = x.card ? Object.keys(x.card.races).length : 0;
+    return `
+      <div class="race-track-row ${x.key === racesView.key ? 'active' : ''}">
+        <button type="button" class="race-track" data-key="${esc(x.key)}">
+          <span class="name">${esc(x.name)}</span>
+          <span class="muted tiny">${n ? `${n} race${n === 1 ? '' : 's'}` : esc(x.state)}</span>
+        </button>
+        ${youtubeIcon(x.youtube)}
+      </div>`;
+  }).join('') || '<p class="muted small-text">No racing at active tracks today.</p>';
 
-  const track = tracks.find(x => x.code === racesView.code);
+  const track = tracks.find(x => x.key === racesView.key);
   if (!track) {
     $('#racesTitle').textContent = 'Entrants';
     $('#racePicker').innerHTML = '';
@@ -621,57 +671,60 @@ function renderRaces() {
     return;
   }
 
-  const races = raceCount(track.code, t);
-  if (racesView.race > races) racesView.race = 1;
+  const races = track.card ? track.card.races : {};
+  const total = track.card && track.card.total;
+  if (total && racesView.race > total) racesView.race = 1;
   $('#racesTitle').textContent = `${track.name} · Race ${racesView.race}`;
-  // Races the track isn't running today are greyed out
+  // Captured races are marked; races beyond the card's last race (when TwinSpires showed it) are greyed out
   $('#racePicker').innerHTML = Array.from({ length: MAX_RACES }, (_, i) => i + 1).map(n =>
-    `<button type="button" class="seg ${n === racesView.race ? 'active' : ''}" data-race="${n}"
-      ${n > races ? `disabled title="No race ${n} today"` : ''}>${n}</button>`).join('');
+    `<button type="button" class="seg ${n === racesView.race ? 'active' : ''} ${races[n] ? 'has-data' : ''}" data-race="${n}"
+      ${total && n > total ? `disabled title="No race ${n} today"` : ''}>${n}</button>`).join('');
 
-  const { entrants, placeholder } = raceEntrants(track.code, t, racesView.race);
-  const note = placeholder ? '<p class="placeholder-note">Placeholder entrants. Race cards aren\'t connected yet.</p>' : '';
-  $('#racesEntrants').innerHTML = `${note}
+  const race = races[racesView.race];
+  if (!race) {
+    $('#racesEntrants').innerHTML = captureSteps(track.name, racesView.race);
+    $('#racesCalc').innerHTML = wpsToggle() + '<p class="muted small-text">Percentages appear once this race is captured.</p>';
+    return;
+  }
+
+  const entrants = race.entrants;
+  const when = new Date(race.capturedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  $('#racesEntrants').innerHTML = `
+    <p class="muted tiny captured-at">Captured from TwinSpires at ${esc(when)}. Capture again to update.</p>
     <div class="table-wrap"><table class="table">
       <thead><tr><th>PP</th><th>Horse</th><th class="num" title="Starts-1st-2nd-3rd">Life</th></tr></thead>
       <tbody>${entrants.map(e => `
         <tr class="${e.scratched ? 'scratched' : ''}"><td>${esc(e.pp)}</td>
           <td>${esc(e.horse)}${e.scratched ? ' <span class="badge scr">SCR</span>' : ''}</td>
-          <td class="num">${e.starts ? lifeLine(e) : '<span class="muted">Debut</span>'}</td></tr>`).join('')}</tbody>
+          <td class="num">${e.starts ? lifeText(e) : `<span class="muted">${lifeText(e)}</span>`}</td></tr>`).join('')}</tbody>
     </table></div>`;
 
-  // Green = the race's highest rate of that type; yellow = above 50%.
+  // Green = the race's highest rate of that type; yellow = 50% or more.
   // Scratched horses keep their numbers, in grey, and don't count toward the highest.
   const all = entrants.map(e => ({ e, p: wpsPercents(e) }));
   const best = k => Math.max(...all.filter(x => x.p && !x.e.scratched).map(x => x.p[k]));
   const top = { win: best('win'), place: best('place'), show: best('show') };
   const cell = (e, p, k) => !p ? '<span class="muted">—</span>'
     : e.scratched ? `<span class="muted">${fmtPct(p[k])}</span>`
-    : `<span class="${p[k] === top[k] ? 'best' : p[k] > 50 ? 'strong' : ''}">${fmtPct(p[k])}</span>`;
+    : `<span class="${p[k] === top[k] ? 'best' : p[k] >= 50 ? 'strong' : ''}">${fmtPct(p[k])}</span>`;
   const shown = wpsShown();
-  $('#racesCalc').innerHTML = `
-    <div class="wps-toggle" role="group" aria-label="Rates to show">${WPS.map(([k, label]) =>
-      `<button type="button" class="seg ${shown.includes(k) ? 'active' : ''}" data-wps="${k}" aria-pressed="${shown.includes(k)}">${label}</button>`).join('')}</div>
-    ${note}
+  $('#racesCalc').innerHTML = `${wpsToggle()}
     <div class="calc-list">${all.map(({ e, p }) => `
       <div class="calc-item ${e.scratched ? 'scratched' : ''}">
         <div class="calc-head"><span><span class="muted">#${esc(e.pp)}</span> <b>${esc(e.horse)}</b>${e.scratched ? ' <span class="badge scr">SCR</span>' : ''}</span>
-          <span class="muted tiny">${e.starts ? lifeLine(e) : 'Debut, no record'}</span></div>
+          <span class="muted tiny">${e.starts ? lifeText(e) : lifeText(e) === 'Debut' ? 'Debut, no record' : 'No record found'}</span></div>
         ${WPS.filter(([k]) => shown.includes(k)).map(([k, label]) =>
           `<div class="calc-row"><span>${label} %</span>${cell(e, p, k)}</div>`).join('')}
       </div>`).join('')}</div>`;
 }
 
 $('#racesTracks').addEventListener('click', e => {
-  const b = e.target.closest('[data-code]');
+  const b = e.target.closest('[data-key]');
   if (!b) return;
-  racesView.code = b.dataset.code;
+  racesView.key = b.dataset.key;
   racesView.race = 1;
   renderRaces();
 });
-
-// Which of WIN / PLACE / SHOW the right column shows; SHOW alone until you change it
-const wpsShown = () => (Array.isArray(state.wpsShown) && state.wpsShown.length ? state.wpsShown : ['show']);
 
 $('#racesCalc').addEventListener('click', e => {
   const b = e.target.closest('[data-wps]');
@@ -690,6 +743,262 @@ $('#racePicker').addEventListener('click', e => {
   racesView.race = +b.dataset.race;
   renderRaces();
 });
+
+/* ----- Receiving a capture: the bookmark opens Mejiro with #capture=<race JSON> ----- */
+
+// Kept until you're signed in (and in this tab's session storage, in case sign-in reloads the page)
+let pendingCaptures = [];
+try { pendingCaptures = JSON.parse(sessionStorage.getItem('mejiro.captures')) || []; } catch (e) { /* storage blocked */ }
+const keepPending = () => { try { sessionStorage.setItem('mejiro.captures', JSON.stringify(pendingCaptures)); } catch (e) { /* storage blocked */ } };
+
+function takeCaptureFromAddress() {
+  const m = location.hash.match(/^#capture=(.+)$/);
+  if (!m) return;
+  history.replaceState(null, '', location.pathname + location.search);
+  try {
+    pendingCaptures.push(JSON.parse(decodeURIComponent(m[1])));
+    keepPending();
+  } catch (err) {
+    toast("That capture couldn't be read. Try capturing the race again.");
+  }
+}
+
+async function applyPendingCaptures() {
+  while (state.user && pendingCaptures.length) {
+    const c = pendingCaptures.shift();
+    keepPending();
+    await importCapture(c);
+  }
+}
+
+// The bookmark reuses one Mejiro tab, so later captures arrive as a change of address
+window.addEventListener('hashchange', () => { takeCaptureFromAddress(); applyPendingCaptures(); });
+
+async function importCapture(c) {
+  const int = v => Math.max(0, Math.floor(+v) || 0);
+  const race = int(c && c.race);
+  if (!c || !Array.isArray(c.entrants) || !c.entrants.length || !c.track || race < 1 || race > MAX_RACES) {
+    return toast('That capture is missing its track, race number or horses.');
+  }
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(c.date) ? c.date : today();
+  await ensureCards(date);
+  const match = matchTrack(c.track);
+  const key = match ? match.code : 'TS-' + normTrack(c.track);
+  const prev = state.cards.tracks[key] || { races: {} };
+  const entrants = c.entrants.slice(0, 30).map((e, i) => ({
+    pp: String(e.pp || i + 1).slice(0, 4),
+    horse: String(e.horse || `Horse ${i + 1}`).slice(0, 60),
+    scratched: !!e.scratched,
+    ...(e.found ? { starts: int(e.starts), wins: int(e.wins), places: int(e.places), shows: int(e.shows) } : {}),
+  }));
+  // Capturing a race again replaces it; the track's other races stay
+  state.cards.tracks[key] = {
+    name: match ? match.name : String(c.track).slice(0, 60),
+    code: match ? match.code : null,
+    total: int(c.total) || prev.total || null,
+    races: { ...prev.races, [race]: { capturedAt: c.capturedAt || new Date().toISOString(), entrants } },
+  };
+  save();
+  if (date === today()) racesView = { date, key, race };
+  goTab('races');
+  renderRaces();
+  const missing = entrants.filter(e => e.starts == null).length;
+  toast(`Captured ${state.cards.tracks[key].name} race ${race}: ${entrants.length} horses` +
+    (missing ? `, ${missing} without a record` : '') + (date === today() ? '' : ` (saved under ${date})`));
+}
+
+/* ----- Setting up the bookmark, and exporting everything captured ----- */
+
+function captureBookmarkUrl() {
+  const site = location.origin + location.pathname;
+  return 'javascript:' + encodeURIComponent('(' + mejiroCapture.toString() + ')(' + JSON.stringify(site) + ')');
+}
+
+function openCaptureSetup() {
+  openModal(`
+    <h3>Set up Mejiro Capture</h3>
+    <p><b>On a computer:</b> show your bookmarks bar (Ctrl+Shift+B), then drag this button onto it.</p>
+    <p><a class="btn primary" id="captureBookmark" href="${esc(captureBookmarkUrl())}">Mejiro Capture</a></p>
+    <p><b>On a phone:</b> copy the code, bookmark any page, then edit that bookmark: name it <i>Mejiro Capture</i> and paste the code as its address.
+      To use it, open a race on TwinSpires, type <i>Mejiro Capture</i> in the address bar and tap the bookmark.</p>
+    <div class="modal-actions">
+      <button class="btn" id="copyCapture" type="button">Copy code</button>
+      <button class="btn ghost" id="closeCapture" type="button">Close</button>
+    </div>`);
+  $('#captureBookmark').onclick = e => { e.preventDefault(); toast('Drag it to your bookmarks bar instead of clicking it'); };
+  $('#copyCapture').onclick = () => navigator.clipboard.writeText(captureBookmarkUrl())
+    .then(() => toast('Copied. Paste it as a bookmark\'s address.'), () => toast("Couldn't copy"));
+  $('#closeCapture').onclick = closeModal;
+}
+
+$('#setupCapture').addEventListener('click', openCaptureSetup);
+$('#racesEntrants').addEventListener('click', e => { if (e.target.closest('[data-setup-capture]')) openCaptureSetup(); });
+
+// Every captured day in one CSV: one row per horse
+$('#exportCards').addEventListener('click', async () => {
+  await flushSave();
+  let days = state.cards ? [state.cards] : [];
+  if (fb && state.user) {
+    try { days = (await userDoc().collection('racecards').get()).docs.map(d => d.data()); }
+    catch (err) { return toast("Couldn't load your captures: " + err.message); }
+  }
+  const cols = ['date', 'track', 'track_code', 'race', 'pp', 'horse', 'starts', 'wins', 'places', 'shows', 'scratched', 'captured_at'];
+  const cell = v => /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : v;
+  const rows = [];
+  days.sort((a, b) => a.date.localeCompare(b.date)).forEach(day =>
+    Object.values(day.tracks || {}).sort((a, b) => a.name.localeCompare(b.name)).forEach(t =>
+      Object.entries(t.races || {}).sort((a, b) => a[0] - b[0]).forEach(([n, r]) =>
+        r.entrants.forEach(e => rows.push([day.date, t.name, t.code || '', n, e.pp, e.horse, e.starts ?? '', e.wins ?? '',
+          e.places ?? '', e.shows ?? '', e.scratched ? 'yes' : '', r.capturedAt].map(cell).join(','))))));
+  if (!rows.length) return toast('Nothing captured yet');
+  download(`mejiro-race-cards-${today()}.csv`, [cols.join(','), ...rows].join('\n'), 'text/csv');
+});
+
+/* =========================================================
+   Mejiro Capture — the bookmark's code. It runs on a TwinSpires program page in your own
+   signed-in browser: opens each runner in turn, reads the LIFE row of its record, then sends
+   the race to Mejiro. It must be self-contained (the bookmark holds this function's source),
+   so it repeats small helpers instead of using the ones above, and uses only block comments.
+   ========================================================= */
+
+function mejiroCapture(site) {
+  if (window.__mejiroBusy) return;
+  window.__mejiroBusy = true;
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const clean = s => String(s || '').replace(/\s+/g, ' ').trim();
+  const html = s => clean(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const box = document.createElement('div');
+  box.id = 'mejiro-capture';
+  box.style.cssText = 'position:fixed;z-index:2147483647;right:12px;bottom:12px;width:min(360px,calc(100vw - 24px));' +
+    'max-height:75vh;overflow:auto;padding:14px 16px;border-radius:12px;background:#0D0A14;color:#F1ECFF;text-align:left;' +
+    'font:14px/1.45 system-ui,sans-serif;border:1px solid #7B61FF;box-shadow:0 10px 30px rgba(0,0,0,.5)';
+  document.body.appendChild(box);
+  const show = inner => { box.innerHTML = '<div style="font-weight:700;color:#C8B4FF;margin-bottom:6px">Mejiro Capture</div>' + inner; };
+  const button = (id, label, primary) => `<button id="${id}" type="button" style="margin:10px 6px 0 0;padding:8px 12px;` +
+    `border-radius:8px;border:1px solid #7B61FF;background:${primary ? '#7B61FF' : 'transparent'};color:#fff;font:600 13px system-ui;cursor:pointer">${label}</button>`;
+  const field = 'display:block;width:100%;margin-top:4px;padding:6px 8px;border-radius:6px;border:1px solid #2A2240;background:#16111F;color:#F1ECFF;font:14px system-ui';
+  const finish = () => { box.remove(); window.__mejiroBusy = false; };
+  const elements = () => [...document.body.querySelectorAll('*')].filter(el => !box.contains(el));
+  const leaves = () => elements().filter(el => !el.children.length);
+  const up = (el, k) => { while (el && k-- > 0) el = el.parentElement; return el; };
+  /* Text of each innermost element, separately: a row's textContent runs its cells together ("LIFE25203") */
+  const cellTexts = el => [...el.querySelectorAll('*')].filter(c => !c.children.length).map(c => clean(c.textContent)).filter(Boolean);
+
+  /* Each runner has a description like "Bay, Gelding, 4 yrs (KY) L" under its name */
+  const DESC = /\b(colt|filly|mare|horse|gelding|ridgling)\b.*?\b\d{1,2}\s*yrs?\b/i;
+  let descs = elements().filter(el => el.textContent.length < 90 && DESC.test(clean(el.textContent)));
+  descs = descs.filter(el => !descs.some(o => o !== el && el.contains(o)));
+  /* Runner rows: the lowest ancestors that are distinct for every runner and share one parent */
+  let rows = descs.length === 1 ? [descs[0].closest('tr') || up(descs[0], 3)] : null;
+  for (let k = 1; k <= 12 && !rows && descs.length > 1; k++) {
+    const r = descs.map(d => up(d, k));
+    if (r.every(Boolean) && new Set(r).size === r.length && r.every(x => x.parentElement === r[0].parentElement)) rows = r;
+  }
+
+  /* If the page isn't understood: the runner table's structure (no scripts, images or most attributes) for Claude */
+  const outline = () => {
+    const anchor = leaves().find(el => /^runner$/i.test(clean(el.textContent))) || descs[0] || document.body;
+    const root = up(anchor, 8) || document.body;
+    const copy = root.cloneNode(true);
+    copy.querySelectorAll('script,style,svg,img,iframe,noscript,#mejiro-capture').forEach(n => n.remove());
+    copy.querySelectorAll('*').forEach(n => [...n.attributes].forEach(a => {
+      if (!['class', 'role', 'data-testid', 'aria-label'].includes(a.name)) n.removeAttribute(a.name);
+    }));
+    return copy.outerHTML.slice(0, 80000);
+  };
+
+  if (!rows || !rows.length) {
+    show("Couldn't find the runners on this page. Open a race's <b>PROGRAM</b> tab and try again.<br><br>" +
+      'If it still fails, copy the page outline and send it to Claude.' + button('mc-copy', 'Copy page outline', true) + button('mc-close', 'Close'));
+    box.querySelector('#mc-copy').onclick = () => navigator.clipboard.writeText(outline())
+      .then(() => { box.querySelector('#mc-copy').textContent = 'Copied'; });
+    box.querySelector('#mc-close').onclick = finish;
+    return;
+  }
+
+  const runners = descs.map((d, i) => {
+    const row = rows[i];
+    const nameEl = d.previousElementSibling || [...d.parentElement.children].find(c => c !== d && clean(c.textContent)) || d.parentElement;
+    const horse = clean(nameEl === d.parentElement ? d.parentElement.textContent.replace(d.textContent, '') : nameEl.textContent);
+    /* Program number: the leftmost short number in the row (the saddle-cloth column) */
+    const nums = [...row.querySelectorAll('*')].filter(el => !el.children.length && /^\d{1,2}[A-Z]?$/.test(clean(el.textContent)))
+      .sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+    const alt = ((row.querySelector('img[alt]') || {}).alt || '').match(/\b\d{1,2}[A-Z]?\b/);
+    return { nameEl, horse, pp: nums.length ? clean(nums[0].textContent) : alt ? alt[0] : String(i + 1), scratched: cellTexts(row).includes('SCR') };
+  });
+
+  /* A horse's LIFE row, read only from a panel that names that horse (not from the runner list) */
+  const lifeOf = name => {
+    const key = name.toUpperCase();
+    for (const label of leaves()) {
+      if (clean(label.textContent).toUpperCase() !== 'LIFE') continue;
+      let p = label;
+      for (let i = 0; i < 15 && (p = p.parentElement); i++) {
+        if (rows.some(r => r !== p && p.contains(r))) break;
+        if (!clean(p.textContent).toUpperCase().includes(key)) continue;
+        /* Starts, wins, places, shows: the first four whole numbers after LIFE (earnings has a "$") */
+        const row = label.closest('tr') || label.parentElement;
+        let n = cellTexts(row).filter(t => /^\d+$/.test(t));
+        if (n.length < 4) n = ((row.innerText || '').match(/LIFE\D*?(\d+)\D+?(\d+)\D+?(\d+)\D+?(\d+)/i) || []).slice(1);
+        if (n.length >= 4) return { starts: +n[0], wins: +n[1], places: +n[2], shows: +n[3] };
+        break;
+      }
+    }
+    return null;
+  };
+
+  /* Race number, total races (only when the race list is fully on the page) and a track name guess */
+  const texts = leaves().map(el => [el, clean(el.textContent)]).filter(([, t]) => t && t.length < 40);
+  const raceHit = texts.find(([, t]) => /^RACE\s*\d{1,2}$/i.test(t));
+  const race = raceHit ? +raceHit[1].match(/\d+/)[0] : '';
+  const seen = new Set(texts.map(([, t]) => t.match(/^(?:R|RACE\s*)(\d{1,2})$/i)).filter(Boolean).map(m => +m[1]));
+  const most = Math.max(0, ...seen);
+  const total = most >= 3 && [...Array(most)].every((_, k) => seen.has(k + 1)) ? most : null;
+  const NAV = /^(PROGRAM|POOLS|PPS|STATS|RESULTS|VIDEO|CLASSIC|BASIC|ADVANCED|SPEED|CLASS|PACE|SUMMARY|TIPS|OFFICIAL|GLOSSARY|RUNNER|JOCKEY|TRAINER|ODDS|PL|RECORD|LIFE|SCR|NEW)$/;
+  const looksLikeTrack = ([, t]) =>/^[A-Z][A-Z .'&-]{2,34}$/.test(t) && !NAV.test(t) && !/^R(ACE)?\s*\d/.test(t);
+  let track = '';
+  if (raceHit) {
+    const near = up(raceHit[0], 6) || document.body;
+    const before = texts.filter(([el]) => near.contains(el) && el.compareDocumentPosition(raceHit[0]) & Node.DOCUMENT_POSITION_FOLLOWING);
+    track = (before.filter(looksLikeTrack).pop() || [])[1] || '';
+  }
+  if (!track) track = (texts.filter(([el, t]) => looksLikeTrack([el, t]) && el.getBoundingClientRect().top < 250)[0] || [])[1] || '';
+
+  (async () => {
+    const out = [];
+    for (let i = 0; i < runners.length; i++) {
+      const r = runners[i];
+      show(`Reading ${i + 1} of ${runners.length}: <b>${html(r.horse)}</b>…`);
+      let life = lifeOf(r.horse);  /* already open */
+      if (!life) {
+        const target = r.nameEl.closest('a,button,[role="button"],[tabindex]') || r.nameEl;
+        target.scrollIntoView({ block: 'center' });
+        target.click();
+        for (let t = 0; t < (r.scratched ? 15 : 40) && !life; t++) { await sleep(150); life = lifeOf(r.horse); }
+      }
+      out.push(Object.assign({ pp: r.pp, horse: r.horse, scratched: r.scratched, found: !!life }, life || {}));
+      await sleep(250);
+    }
+    const found = out.filter(e => e.found).length;
+    show(`<div>Read ${found} of ${out.length} records.${found < out.length ? ' Horses without one will show "No record found".' : ''}</div>` +
+      `<label style="display:block;margin-top:10px;font-size:12px;color:#9C92BC">Track<input id="mc-track" style="${field}" value="${html(track)}"></label>` +
+      `<label style="display:block;margin-top:8px;font-size:12px;color:#9C92BC">Race<input id="mc-race" type="number" min="1" max="15" style="${field}" value="${race}"></label>` +
+      `<div style="margin-top:10px;font-size:12px;color:#9C92BC">${out.map(e => `#${html(e.pp)} ${html(e.horse)}${e.scratched ? ' (SCR)' : ''}: ` +
+        (e.found ? `${e.starts}-${e.wins}-${e.places}-${e.shows}` : '<span style="color:#FF5C6C">no record</span>')).join('<br>')}</div>` +
+      `<a id="mc-send" href="#" target="mejiro" style="display:inline-block;margin:10px 6px 0 0;padding:8px 12px;border-radius:8px;` +
+      `background:#7B61FF;color:#fff;font:600 13px system-ui;text-decoration:none">Send to Mejiro</a>` + button('mc-close', 'Close'));
+    box.querySelector('#mc-close').onclick = finish;
+    const send = box.querySelector('#mc-send');
+    send.onclick = () => {
+      const name = clean(box.querySelector('#mc-track').value), n = +box.querySelector('#mc-race').value;
+      if (!name || !(n >= 1 && n <= 15)) { alert('Enter the track and a race number from 1 to 15.'); return false; }
+      const now = new Date(), date = new Date(now - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+      send.href = site + '#capture=' + encodeURIComponent(JSON.stringify(
+        { v: 1, source: 'twinspires', date, track: name, race: n, total, capturedAt: now.toISOString(), entrants: out }));
+      setTimeout(finish, 500);
+    };
+  })();
+}
 
 /* =========================================================
    Strategies — short notes, reordered by dragging the ☰ handle
@@ -759,221 +1068,35 @@ $('#strategyList').addEventListener('pointerdown', e => {
 });
 
 /* =========================================================
-   Calendar — one racetrack at a time, from calendar-data.js
-   (generated by the calendar folder; run its Sync Calendar.bat to refresh)
+   Calendar data — calendar-data.js, generated by the calendar folder's Sync Calendar.bat.
+   Today's Races uses it for which tracks race today and their YouTube links (the "youtube"
+   column of calendar\data\tracks.csv); Log bets uses it for its track list.
    ========================================================= */
 
 const CAL = window.MEJIRO_CALENDAR || { tracks: [], meets: [], race_days: [], events: [] };
-
-const DAY_STATUS = {
-  confirmed: 'Confirmed (seen on a race card)',
-  scheduled: 'Scheduled (official date)',
-  estimated: 'Estimated (from the meet’s weekly pattern)',
-  cancelled: 'Cancelled',
-};
-const PRECISION = { exact: 'Exact dates', pattern: 'Weekly pattern', range_only: 'Season only' };
-
-const calDaysByTrack = new Map();
-CAL.race_days.forEach(d => {
-  if (!calDaysByTrack.has(d.track_code)) calDaysByTrack.set(d.track_code, []);
-  calDaysByTrack.get(d.track_code).push(d);
-});
 
 function parseDate(iso) {
   const [y, m, d] = iso.split('-').map(Number);
   return new Date(y, m - 1, d);
 }
 
-function shortDate(iso) { return parseDate(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }); }
-
-// "13:50" → "1:50 PM"
-function fmtPost(hhmm) {
-  const [h, m] = hhmm.split(':').map(Number);
-  return new Date(2000, 0, 1, h, m).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-}
-
-// When a day has several cards (e.g. Thoroughbred + Quarter Horse), show the surest status
-function dayStatus(list) {
-  return ['confirmed', 'scheduled', 'estimated', 'cancelled'].find(s => list.some(d => d.status === s));
-}
-
 const activeTracks = () => CAL.tracks.filter(t => t.status === 'active');
 
-// "Hide tracks without race days" (a Calendar checkbox, on by default) also trims the Tracker's list.
-// Tracks without race days are mostly harness tracks that only publish season dates.
-const hideNoDays = () => state.calHideNoDays !== false;
-const withRaceDays = tracks => hideNoDays() ? tracks.filter(t => calDaysByTrack.has(t.code)) : tracks;
+// Tracks with at least one race day on file (harness tracks that only publish season dates have none)
+const tracksWithRaceDays = new Set(CAL.race_days.map(d => d.track_code));
 
-// <option>s grouped by state; `notes` adds "(closed)" / "(no race days)" hints for the Calendar
-function trackOptions(tracks, notes = false) {
+// <option>s grouped by state
+function trackOptions(tracks) {
   const byState = new Map();
   tracks.forEach(t => {
     if (!byState.has(t.state)) byState.set(t.state, []);
     byState.get(t.state).push(t);
   });
-  const hint = t => !notes ? '' : t.status !== 'active' ? ` (${t.status})` : calDaysByTrack.has(t.code) ? '' : ' (no race days)';
   return [...byState.keys()].sort().map(st => `<optgroup label="${esc(st)}">${byState.get(st)
     .sort((a, b) => a.name.localeCompare(b.name))
-    .map(t => `<option value="${esc(t.code)}">${esc(t.name)}${hint(t)}</option>`)
+    .map(t => `<option value="${esc(t.code)}">${esc(t.name)}</option>`)
     .join('')}</optgroup>`).join('');
 }
-
-// Last pick, else the first home track in the list, else the first track
-function calSelectedCode(tracks) {
-  const known = code => tracks.some(t => t.code === code);
-  if (known(state.calTrack)) return state.calTrack;
-  return HOME_TRACKS.find(known) || tracks[0]?.code;
-}
-
-// The current month and the 11 after it
-function calMonths() {
-  const now = new Date();
-  return Array.from({ length: 12 }, (_, i) => new Date(now.getFullYear(), now.getMonth() + i, 1));
-}
-
-let calView = { byDate: new Map(), ranges: [] };
-
-function renderCalendarTab() {
-  if (!CAL.tracks.length) {
-    $('#calGrid').innerHTML = `<div class="card"><p class="empty">No calendar data found. Run <b>calendar\\Sync Calendar.bat</b> to create <code>calendar-data.js</code>, then reload.</p></div>`;
-    return;
-  }
-  const hideInactive = state.calHideInactive !== false;
-  $('#calHideInactive').checked = hideInactive;
-  $('#calHideNoDays').checked = hideNoDays();
-  const tracks = withRaceDays(hideInactive ? activeTracks() : CAL.tracks);
-  const sel = $('#calTrack');
-  sel.innerHTML = trackOptions(tracks, true);
-  const code = calSelectedCode(tracks);
-  sel.value = code;
-  const track = CAL.tracks.find(t => t.code === code);
-
-  const months = calMonths();
-  const first = localISO(months[0]);
-  const last = localISO(new Date(months[11].getFullYear(), months[11].getMonth() + 1, 0));
-  const t = today();
-
-  const days = (calDaysByTrack.get(code) || []).filter(d => d.race_date >= first && d.race_date <= last);
-  const byDate = new Map();
-  days.forEach(d => byDate.set(d.race_date, [...(byDate.get(d.race_date) || []), d]));
-  const meets = CAL.meets.filter(m => m.track_code === code && m.end_date >= first && m.start_date <= last);
-  const ranges = meets.filter(m => m.date_precision === 'range_only');
-  calView = { byDate, ranges };
-  // Past the end of the track's last known meet, an empty month means "not announced", not "no racing"
-  const lastKnown = CAL.meets.filter(m => m.track_code === code).reduce((max, m) => m.end_date > max ? m.end_date : max, '');
-
-  const statuses = [...new Set(days.map(d => d.status))];
-  $('#calLegend').innerHTML = ['confirmed', 'scheduled', 'estimated', 'cancelled'].filter(s => statuses.includes(s))
-    .map(s => `<span><i class="swatch s-${s}"></i>${DAY_STATUS[s].split(' (')[0]}</span>`).join('')
-    + (days.some(d => d.featured_event) ? '<span><i class="swatch featured"></i>Featured race</span>' : '')
-    + (ranges.length ? '<span><i class="swatch range"></i>Season (nights not published)</span>' : '');
-
-  // Track summary
-  const upcoming = days.filter(d => d.race_date >= t && d.status !== 'cancelled');
-  const next = upcoming[0];
-  const current = meets.find(m => m.start_date <= t && m.end_date >= t);
-  const raceDayCount = new Set(days.filter(d => d.status !== 'cancelled').map(d => d.race_date)).size;
-  let note = '';
-  if (!days.length && ranges.length) note = 'This track publishes season dates but not individual race nights. The shaded days show the season.';
-  else if (!days.length) note = 'No race dates on file for the next 12 months.';
-  $('#calTrackInfo').innerHTML = `
-    <div class="card track-card">
-      <div>
-        <h3>${esc(track.name)}</h3>
-        <p class="muted small-text">${esc([track.city, track.state].filter(Boolean).join(', '))} · ${esc(track.track_type)} · ${esc(track.breeds.split(',').join(', '))}
-          ${track.website ? ` · <a href="${esc(track.website)}" target="_blank" rel="noopener">Website ↗</a>` : ''}
-          ${track.youtube ? ` · <a href="${esc(track.youtube)}" target="_blank" rel="noopener">YouTube${track.livestream ? ' (live)' : ''} ↗</a>` : ''}</p>
-        ${note ? `<p class="small-text">${note}</p>` : ''}
-      </div>
-      <div class="track-facts">
-        <div><span class="label">Next race day</span><b>${next ? shortDate(next.race_date) : '—'}</b>
-          <small>${next ? [next.first_post_local && 'First post ' + fmtPost(next.first_post_local), next.featured_event].filter(Boolean).map(esc).join(' · ') : ''}</small></div>
-        <div><span class="label">Current meet</span><b>${current ? esc(current.meet_name) : 'Off-season'}</b></div>
-        <div><span class="label">Race days (12 mo)</span><b>${raceDayCount}</b></div>
-      </div>
-    </div>`;
-
-  $('#calGrid').innerHTML = months.map(first => {
-    const y = first.getFullYear(), m = first.getMonth();
-    const total = new Date(y, m + 1, 0).getDate();
-    let cells = ['S', 'M', 'T', 'W', 'T', 'F', 'S'].map(d => `<span class="dow">${d}</span>`).join('');
-    cells += '<span></span>'.repeat(first.getDay());
-    let count = 0;
-    for (let d = 1; d <= total; d++) {
-      const iso = localISO(new Date(y, m, d));
-      const list = byDate.get(iso) || [];
-      const cls = ['day'];
-      if (list.length) {
-        const s = dayStatus(list);
-        cls.push('race', 's-' + s);
-        if (s !== 'cancelled') count++;
-        if (list.some(x => x.featured_event)) cls.push('featured');
-      } else if (ranges.some(r => iso >= r.start_date && iso <= r.end_date)) cls.push('range');
-      if (iso < t) cls.push('past');
-      if (iso === t) cls.push('today');
-      cells += `<span class="${cls.join(' ')}" data-date="${iso}">${d}</span>`;
-    }
-    const unknown = !count && localISO(first) > lastKnown;
-    return `
-      <div class="month ${count ? '' : 'off'}">
-        <h4>${first.toLocaleDateString('en-US', { month: 'long' })} <span class="year">${y}</span>
-          <span class="muted tiny">${count ? `${count} race day${count === 1 ? '' : 's'}` : unknown ? 'Dates TBA' : 'No racing'}</span></h4>
-        <div class="month-grid">${cells}</div>
-      </div>`;
-  }).join('');
-
-  $('#meetTable').innerHTML = `
-    <thead><tr><th>Meet</th><th>Breed</th><th>Dates</th><th class="num">Race days</th><th>Dates are</th><th>Status</th><th></th></tr></thead>
-    <tbody>${meets.map(mt => `
-      <tr>
-        <td>${esc(mt.meet_name)}</td>
-        <td>${esc(mt.breed)}</td>
-        <td>${shortDate(mt.start_date)} – ${shortDate(mt.end_date)}</td>
-        <td class="num">${mt.date_precision === 'range_only' ? '—' : mt.calendar_days}${mt.planned_days && mt.planned_days !== mt.calendar_days ? ` <span class="muted tiny">of ${mt.planned_days}</span>` : ''}</td>
-        <td>${PRECISION[mt.date_precision] || esc(mt.date_precision)}</td>
-        <td><span class="badge ${mt.status === 'cancelled' || mt.status === 'ended_early' ? 'lost' : mt.status === 'tentative' ? 'demo' : 'clean'}">${esc(mt.status.replace('_', ' ').toUpperCase())}</span></td>
-        <td>${mt.source_url ? `<a href="${esc(mt.source_url)}" target="_blank" rel="noopener">${esc(mt.source_name || 'Source')} ↗</a>` : ''}</td>
-      </tr>`).join('') || '<tr><td colspan="7" class="empty">No meets in the next 12 months.</td></tr>'}</tbody>`;
-
-  $('#calSource').textContent = CAL.generated_at
-    ? `Calendar data generated ${new Date(CAL.generated_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}. Run Sync Calendar.bat to refresh it.`
-    : '';
-}
-
-$('#calTrack').addEventListener('change', e => {
-  state.calTrack = e.target.value;
-  save();
-  renderCalendarTab();
-});
-
-$('#calHideInactive').addEventListener('change', e => {
-  state.calHideInactive = e.target.checked;
-  save();
-  renderCalendarTab();
-});
-
-$('#calHideNoDays').addEventListener('change', e => {
-  state.calHideNoDays = e.target.checked;
-  save();
-  renderCalendarTab();
-  renderTrackSelects();
-});
-
-$('#calGrid').addEventListener('mouseover', e => {
-  const cell = e.target.closest('.day.race, .day.range');
-  if (!cell) return hideTip();
-  const iso = cell.dataset.date;
-  const list = calView.byDate.get(iso) || [];
-  const lines = list.length
-    ? list.map(d => `<b>${esc(d.meet_name || d.breed)}</b>${esc(d.breed)} · ${DAY_STATUS[d.status] || esc(d.status)}`
-        + (d.first_post_local ? ` · first post ${fmtPost(d.first_post_local)}` : '')
-        + (d.featured_event ? `<br>★ ${esc(d.featured_event)}` : ''))
-    : calView.ranges.filter(r => iso >= r.start_date && iso <= r.end_date)
-        .map(r => `<b>${esc(r.meet_name)}</b>In season, but race nights aren't published`);
-  const r = cell.getBoundingClientRect();
-  showTip(`<span class="muted">${shortDate(iso)}</span><br>` + lines.join('<br>'), r.left + r.width / 2, r.top);
-});
-$('#calGrid').addEventListener('mouseleave', hideTip);
 
 /* =========================================================
    Risk Matrix
@@ -1225,4 +1348,5 @@ $('#signOutBtn').addEventListener('click', signOut);
 /* ---------- Boot ---------- */
 
 resetBetForm();
+takeCaptureFromAddress();
 initFirebase();

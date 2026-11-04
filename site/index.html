@@ -46,7 +46,6 @@
         <button data-tab="tracker" class="active">Tracker</button>
         <button data-tab="races">Today's Races</button>
         <button data-tab="strategies">Strategies</button>
-        <button data-tab="calendar">Calendar</button>
         <button data-tab="matrix">Risk Matrix</button>
         <button data-tab="history">History</button>
         <button data-tab="settings">Settings</button>
@@ -93,8 +92,11 @@
       <!-- ---------- TODAY'S RACES ---------- -->
       <section id="tab-races" class="tab">
         <header class="tab-head">
-          <h2>Today's Races</h2>
-          <span class="muted small-text" id="racesDate"></span>
+          <h2>Today's Races <span class="muted small-text" id="racesDate"></span></h2>
+          <div class="head-actions">
+            <button class="btn ghost" id="setupCapture" type="button">Set up Mejiro Capture</button>
+            <button class="btn ghost" id="exportCards" type="button">Download CSV</button>
+          </div>
         </header>
         <div class="races-layout">
           <div class="card races-col">
@@ -124,28 +126,6 @@
         <div class="card">
           <ul class="strategy-list" id="strategyList"></ul>
         </div>
-      </section>
-
-      <!-- ---------- CALENDAR ---------- -->
-      <section id="tab-calendar" class="tab">
-        <header class="tab-head">
-          <h2>Calendar</h2>
-        </header>
-        <div class="toolbar cal-toolbar">
-          <div class="track-pick-row">
-            <label class="track-picker">Select a racetrack<select id="calTrack"></select></label>
-            <label class="check"><input type="checkbox" id="calHideInactive"> Hide inactive tracks</label>
-            <label class="check"><input type="checkbox" id="calHideNoDays"> Hide tracks without race days</label>
-          </div>
-          <div class="legend" id="calLegend"></div>
-        </div>
-        <div id="calTrackInfo"></div>
-        <div class="cal-grid" id="calGrid"></div>
-        <div class="card">
-          <h3>Meets</h3>
-          <div class="table-wrap"><table class="table" id="meetTable"></table></div>
-        </div>
-        <p class="muted tiny" id="calSource"></p>
       </section>
 
       <!-- ---------- RISK MATRIX ---------- -->
