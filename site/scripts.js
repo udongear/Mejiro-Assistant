@@ -774,37 +774,43 @@ async function applyPendingCaptures() {
 // The bookmark reuses one Mejiro tab, so later captures arrive as a change of address
 window.addEventListener('hashchange', () => { takeCaptureFromAddress(); applyPendingCaptures(); });
 
+// A capture is one race ({ race, entrants }) or, from "All races", a whole card ({ races: [{ race, entrants }] })
 async function importCapture(c) {
   const int = v => Math.max(0, Math.floor(+v) || 0);
-  const race = int(c && c.race);
-  if (!c || !Array.isArray(c.entrants) || !c.entrants.length || !c.track || race < 1 || race > MAX_RACES) {
-    return toast('That capture is missing its track, race number or horses.');
-  }
+  const list = !c ? [] : Array.isArray(c.races) ? c.races : [{ race: c.race, entrants: c.entrants }];
+  const races = list.filter(r => r && Array.isArray(r.entrants) && r.entrants.length && int(r.race) >= 1 && int(r.race) <= MAX_RACES);
+  if (!c || !c.track || !races.length) return toast('That capture is missing its track, race number or horses.');
   const date = /^\d{4}-\d{2}-\d{2}$/.test(c.date) ? c.date : today();
   await ensureCards(date);
   const match = matchTrack(c.track);
   const key = match ? match.code : 'TS-' + normTrack(c.track);
   const prev = state.cards.tracks[key] || { races: {} };
-  const entrants = c.entrants.slice(0, 30).map((e, i) => ({
-    pp: String(e.pp || i + 1).slice(0, 4),
-    horse: String(e.horse || `Horse ${i + 1}`).slice(0, 60),
-    scratched: !!e.scratched,
-    ...(e.found ? { starts: int(e.starts), wins: int(e.wins), places: int(e.places), shows: int(e.shows) } : {}),
-  }));
+  const capturedAt = c.capturedAt || new Date().toISOString();
+  const cleaned = Object.fromEntries(races.map(r => [int(r.race), {
+    capturedAt,
+    entrants: r.entrants.slice(0, 30).map((e, i) => ({
+      pp: String(e.pp || i + 1).slice(0, 4),
+      horse: String(e.horse || `Horse ${i + 1}`).slice(0, 60),
+      scratched: !!e.scratched,
+      ...(e.found ? { starts: int(e.starts), wins: int(e.wins), places: int(e.places), shows: int(e.shows) } : {}),
+    })),
+  }]));
   // Capturing a race again replaces it; the track's other races stay
   state.cards.tracks[key] = {
     name: match ? match.name : String(c.track).slice(0, 60),
     code: match ? match.code : null,
     total: int(c.total) || prev.total || null,
-    races: { ...prev.races, [race]: { capturedAt: c.capturedAt || new Date().toISOString(), entrants } },
+    races: { ...prev.races, ...cleaned },
   };
   save();
-  if (date === today()) racesView = { date, key, race };
+  const numbers = Object.keys(cleaned).map(Number).sort((a, b) => a - b);
+  if (date === today()) racesView = { date, key, race: numbers[0] };
   goTab('races');
   renderRaces();
-  const missing = entrants.filter(e => e.starts == null).length;
-  toast(`Captured ${state.cards.tracks[key].name} race ${race}: ${entrants.length} horses` +
-    (missing ? `, ${missing} without a record` : '') + (date === today() ? '' : ` (saved under ${date})`));
+  const horses = Object.values(cleaned).flatMap(r => r.entrants);
+  const missing = horses.filter(e => e.starts == null).length;
+  toast(`Captured ${state.cards.tracks[key].name} ` + (numbers.length === 1 ? `race ${numbers[0]}` : `races ${numbers[0]}–${numbers[numbers.length - 1]}`) +
+    `: ${horses.length} horses` + (missing ? `, ${missing} without a record` : '') + (date === today() ? '' : ` (saved under ${date})`));
 }
 
 /* ----- Setting up the bookmark, and exporting everything captured ----- */
@@ -876,6 +882,7 @@ function mejiroCapture(site) {
   const show = inner => { box.innerHTML = '<div style="font-weight:700;color:#C8B4FF;margin-bottom:6px">Mejiro Capture</div>' + inner; };
   const button = (id, label, primary) => `<button id="${id}" type="button" style="margin:10px 6px 0 0;padding:8px 12px;` +
     `border-radius:8px;border:1px solid #7B61FF;background:${primary ? '#7B61FF' : 'transparent'};color:#fff;font:600 13px system-ui;cursor:pointer">${label}</button>`;
+  const note = text => `<div style="margin-top:10px;font-size:12px;color:#9C92BC">${text}</div>`;
   const field = 'display:block;width:100%;margin-top:4px;padding:6px 8px;border-radius:6px;border:1px solid #2A2240;background:#16111F;color:#F1ECFF;font:14px system-ui';
   const finish = () => { box.remove(); window.__mejiroBusy = false; };
   const elements = () => [...document.body.querySelectorAll('*')].filter(el => !box.contains(el));
@@ -891,60 +898,37 @@ function mejiroCapture(site) {
     el.click();
   };
 
-  /* Each runner has a description like "Bay, Gelding, 4 yrs (KY) L" under its name */
+  /* The runner list as it is right now. Each runner has a description like "Bay, Gelding, 4 yrs (KY) L" under its name. */
   const DESC = /\b(colt|filly|mare|horse|gelding|ridgling)\b.*?\b\d{1,2}\s*yrs?\b/i;
-  let descs = elements().filter(el => el.textContent.length < 90 && DESC.test(clean(el.textContent)));
-  descs = descs.filter(el => !descs.some(o => o !== el && el.contains(o)));
-  /* Runner rows: the lowest ancestors that are distinct for every runner and share one parent */
-  let rows = descs.length === 1 ? [descs[0].closest('tr') || up(descs[0], 3)] : null;
-  for (let k = 1; k <= 12 && !rows && descs.length > 1; k++) {
-    const r = descs.map(d => up(d, k));
-    if (r.every(Boolean) && new Set(r).size === r.length && r.every(x => x.parentElement === r[0].parentElement)) rows = r;
-  }
-
-  /* If the page isn't understood: the runner table's structure (no scripts, images or most attributes) for Claude */
-  /* Three parts: the runner list, an open LIFE panel if any, and the short texts near the top of the page */
-  const outline = () => {
-    const strip = root => {
-      const copy = root.cloneNode(true);
-      copy.querySelectorAll('script,style,svg,img,iframe,noscript,#mejiro-capture').forEach(n => n.remove());
-      copy.querySelectorAll('*').forEach(n => [...n.attributes].forEach(a => {
-        if (!['class', 'id', 'role', 'aria-label', 'aria-expanded', 'href'].includes(a.name) && !a.name.startsWith('data-')) n.removeAttribute(a.name);
-      }));
-      return copy.outerHTML;
-    };
-    const anchor = (rows && rows[0]) || leaves().find(el => /^runner$/i.test(clean(el.textContent))) || descs[0];
-    const life = leaves().find(el => /^life$/i.test(clean(el.textContent)));
-    const top = leaves().filter(el => { const r = el.getBoundingClientRect(); return r.top < 320 && r.height > 0; })
-      .map(el => `${el.tagName.toLowerCase()}.${typeof el.className === 'string' ? el.className.trim().replace(/\s+/g, '.') : ''}: ${clean(el.textContent)}`)
-      .filter(t => !/:\s*$/.test(t)).slice(0, 120);
-    return ['<!-- RUNNER LIST -->', anchor ? strip(up(anchor, 2) || anchor) : '(not found)',
-      '<!-- LIFE PANEL -->', life ? strip(up(life, 8) || life) : '(no "LIFE" text on the page: open a horse\'s record by hand first)',
-      '<!-- TOP OF PAGE -->', top.join('\n')].join('\n').slice(0, 150000);
+  const findRunners = () => {
+    let descs = elements().filter(el => el.textContent.length < 90 && DESC.test(clean(el.textContent)));
+    descs = descs.filter(el => !descs.some(o => o !== el && el.contains(o)));
+    /* Runner rows: the lowest ancestors that are distinct for every runner and share one parent */
+    let rows = descs.length === 1 ? [descs[0].closest('tr') || up(descs[0], 3)] : null;
+    for (let k = 1; k <= 12 && !rows && descs.length > 1; k++) {
+      const r = descs.map(d => up(d, k));
+      if (r.every(Boolean) && new Set(r).size === r.length && r.every(x => x.parentElement === r[0].parentElement)) rows = r;
+    }
+    if (!rows || !rows.length) return null;
+    return descs.map((d, i) => {
+      const row = rows[i];
+      const nameBox = d.previousElementSibling || d.parentElement;
+      /* Press the innermost element holding the name: the page listens there, and a press on a parent never reaches it */
+      const inner = [...nameBox.querySelectorAll('*')].filter(el => !el.children.length && clean(el.textContent) && !d.contains(el));
+      const nameEl = row.querySelector('.entry-runner-name') || inner[0] || nameBox;
+      const horse = nameEl === d.parentElement ? clean(nameEl.textContent.replace(d.textContent, '')) : clean(nameEl.textContent);
+      /* Program number: the saddle cloth, else the leftmost short number in the row */
+      const cloth = row.querySelector('.program-number, .saddle-cloth');
+      const nums = [...row.querySelectorAll('*')].filter(el => !el.children.length && /^\d{1,2}[A-Z]?$/.test(clean(el.textContent)))
+        .sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+      const pp = cloth && clean(cloth.textContent) ? clean(cloth.textContent) : nums.length ? clean(nums[0].textContent) : String(i + 1);
+      const scratched = cellTexts(row).includes('SCR') || /scratch/i.test(row.className) || !!row.querySelector('[class*="scratch"], [class*="Scratch"]');
+      return { row, nameEl, horse, pp, scratched };
+    }).filter(r => r.horse);
   };
 
-  if (!rows || !rows.length) {
-    show("Couldn't find the runners on this page. Open a race's <b>PROGRAM</b> tab and try again.<br><br>" +
-      'If it still fails, copy the page outline and send it to Claude.' + button('mc-copy', 'Copy page outline', true) + button('mc-close', 'Close'));
-    box.querySelector('#mc-copy').onclick = () => navigator.clipboard.writeText(outline())
-      .then(() => { box.querySelector('#mc-copy').textContent = 'Copied'; });
-    box.querySelector('#mc-close').onclick = finish;
-    return;
-  }
-
-  const runners = descs.map((d, i) => {
-    const row = rows[i];
-    const nameEl = d.previousElementSibling || [...d.parentElement.children].find(c => c !== d && clean(c.textContent)) || d.parentElement;
-    const horse = clean(nameEl === d.parentElement ? d.parentElement.textContent.replace(d.textContent, '') : nameEl.textContent);
-    /* Program number: the leftmost short number in the row (the saddle-cloth column) */
-    const nums = [...row.querySelectorAll('*')].filter(el => !el.children.length && /^\d{1,2}[A-Z]?$/.test(clean(el.textContent)))
-      .sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
-    const alt = ((row.querySelector('img[alt]') || {}).alt || '').match(/\b\d{1,2}[A-Z]?\b/);
-    return { row, nameEl, horse, pp: nums.length ? clean(nums[0].textContent) : alt ? alt[0] : String(i + 1), scratched: cellTexts(row).includes('SCR') };
-  });
-
-  /* A horse's LIFE row, read only from a panel that names that horse (not from the runner list) */
-  const lifeOf = name => {
+  /* A horse's LIFE row, read only from a panel that names that horse (never from another runner's row) */
+  const lifeOf = (name, rows) => {
     const key = name.toUpperCase();
     for (const label of leaves()) {
       if (clean(label.textContent).toUpperCase() !== 'LIFE') continue;
@@ -963,63 +947,148 @@ function mejiroCapture(site) {
     return null;
   };
 
-  /* Race number, total races (only when the race list is fully on the page) and a track name guess */
-  const texts = leaves().map(el => [el, clean(el.textContent)]).filter(([, t]) => t && t.length < 40);
-  const raceHit = texts.find(([, t]) => /^RACE\s*\d{1,2}$/i.test(t));
-  const race = raceHit ? +raceHit[1].match(/\d+/)[0] : '';
-  const seen = new Set(texts.map(([, t]) => t.match(/^(?:R|RACE\s*)(\d{1,2})$/i)).filter(Boolean).map(m => +m[1]));
-  const most = Math.max(0, ...seen);
-  const total = most >= 3 && [...Array(most)].every((_, k) => seen.has(k + 1)) ? most : null;
-  const NAV = /^(PROGRAM|POOLS|PPS|STATS|RESULTS|VIDEO|CLASSIC|BASIC|ADVANCED|SPEED|CLASS|PACE|SUMMARY|TIPS|OFFICIAL|GLOSSARY|RUNNER|JOCKEY|TRAINER|ODDS|PL|RECORD|LIFE|SCR|NEW)$/;
-  const looksLikeTrack = ([, t]) =>/^[A-Z][A-Z .'&-]{2,34}$/.test(t) && !NAV.test(t) && !/^R(ACE)?\s*\d/.test(t);
-  let track = '';
-  if (raceHit) {
-    const near = up(raceHit[0], 6) || document.body;
-    const before = texts.filter(([el]) => near.contains(el) && el.compareDocumentPosition(raceHit[0]) & Node.DOCUMENT_POSITION_FOLLOWING);
-    track = (before.filter(looksLikeTrack).pop() || [])[1] || '';
-  }
-  if (!track) track = (texts.filter(([el, t]) => looksLikeTrack([el, t]) && el.getBoundingClientRect().top < 250)[0] || [])[1] || '';
+  const texts = () => leaves().map(el => [el, clean(el.textContent)]).filter(([, t]) => t && t.length < 40);
+  const raceNow = () => { const hit = texts().find(([, t]) => /^RACE\s*\d{1,2}$/i.test(t)); return hit ? +hit[1].match(/\d+/)[0] : 0; };
+  /* The previous/next race buttons read "R7", "R9" */
+  const raceButton = n => leaves().find(el => clean(el.textContent) === 'R' + n);
+  const trackName = () => {
+    const named = document.querySelector('.track-name');
+    if (named && clean(named.textContent)) return clean(named.textContent);
+    const NAV = /^(PROGRAM|POOLS|PPS|STATS|RESULTS|VIDEO|CLASSIC|BASIC|ADVANCED|SPEED|CLASS|PACE|SUMMARY|TIPS|OFFICIAL|GLOSSARY|RUNNER|JOCKEY|TRAINER|ODDS|PL|RECORD|LIFE|SCR|NEW|FAQ)$/;
+    const hit = texts().find(([el, t]) => /^[A-Z][A-Za-z .'&-]{2,34}$/.test(t) && !NAV.test(t.toUpperCase()) && !/^R(ACE)?\s*\d/i.test(t)
+      && el.getBoundingClientRect().top < 250 && !el.closest('nav, header'));
+    return hit ? hit[1] : '';
+  };
 
-  (async () => {
+  /* Three parts: the runner list, an open LIFE panel if any, and the short texts near the top of the page */
+  const outline = () => {
+    const strip = root => {
+      const copy = root.cloneNode(true);
+      copy.querySelectorAll('script,style,svg,img,iframe,noscript,#mejiro-capture').forEach(n => n.remove());
+      copy.querySelectorAll('*').forEach(n => [...n.attributes].forEach(a => {
+        if (!['class', 'id', 'role', 'aria-label', 'aria-expanded', 'href'].includes(a.name) && !a.name.startsWith('data-')) n.removeAttribute(a.name);
+      }));
+      return copy.outerHTML;
+    };
+    const runners = findRunners();
+    const anchor = runners ? runners[0].row : leaves().find(el => /^runner$/i.test(clean(el.textContent)));
+    const life = leaves().find(el => /^life$/i.test(clean(el.textContent)));
+    const top = leaves().filter(el => { const r = el.getBoundingClientRect(); return r.top < 320 && r.height > 0; })
+      .map(el => `${el.tagName.toLowerCase()}.${typeof el.className === 'string' ? el.className.trim().replace(/\s+/g, '.') : ''}: ${clean(el.textContent)}`)
+      .filter(t => !/:\s*$/.test(t)).slice(0, 120);
+    return ['<!-- RUNNER LIST -->', anchor ? strip(up(anchor, 2) || anchor) : '(not found)',
+      '<!-- LIFE PANEL -->', life ? strip(up(life, 8) || life) : '(no "LIFE" text on the page: open a horse\'s record by hand first)',
+      '<!-- TOP OF PAGE -->', top.join('\n')].join('\n').slice(0, 150000);
+  };
+  const copyButton = () => {
+    const b = box.querySelector('#mc-copy');
+    if (b) b.onclick = () => navigator.clipboard.writeText(outline()).then(() => { b.textContent = 'Copied'; });
+  };
+
+  /* Open each runner in turn and read its record */
+  const readRace = async prefix => {
+    const runners = findRunners();
+    if (!runners) return null;
+    const rows = runners.map(r => r.row);
     const out = [];
     for (let i = 0; i < runners.length; i++) {
       const r = runners[i];
-      show(`Reading ${i + 1} of ${runners.length}: <b>${html(r.horse)}</b>…`);
-      let life = lifeOf(r.horse);  /* already open */
-      /* Try the name's link or button, then the name itself, then the whole row, each with a full mouse press */
-      const targets = [r.nameEl.closest('a,button,[role="button"],[tabindex]'), r.nameEl, r.row].filter((t, k, a) => t && a.indexOf(t) === k);
-      for (const target of targets) {
+      show(`${prefix}Reading ${i + 1} of ${runners.length}: <b>${html(r.horse)}</b>…`);
+      let life = lifeOf(r.horse, rows);  /* already open */
+      for (const target of [r.nameEl, r.row].filter((t, k, a) => t && a.indexOf(t) === k)) {
         if (life) break;
         target.scrollIntoView({ block: 'center' });
         press(target);
-        for (let t = 0; t < (r.scratched ? 10 : 20) && !life; t++) { await sleep(150); life = lifeOf(r.horse); }
+        for (let t = 0; t < (r.scratched ? 10 : 25) && !life; t++) { await sleep(150); life = lifeOf(r.horse, rows); }
       }
       out.push(Object.assign({ pp: r.pp, horse: r.horse, scratched: r.scratched, found: !!life }, life || {}));
-      await sleep(250);
+      await sleep(200);
     }
-    const found = out.filter(e => e.found).length;
-    show(`<div>Read ${found} of ${out.length} records.${found < out.length ? ' Horses without one will show "No record found".' : ''}</div>` +
+    return out;
+  };
+
+  /* Switch races with the page's own R7/R9 buttons, then wait until the new race's runners are showing */
+  const goTo = async n => {
+    const control = raceButton(n);
+    if (!control) return false;
+    const before = (findRunners() || []).map(r => r.horse).join('|');
+    press(control);
+    for (let t = 0; t < 80; t++) {
+      await sleep(150);
+      const now = findRunners();
+      if (raceNow() === n && now && now.length && now.map(r => r.horse).join('|') !== before) { await sleep(500); return true; }
+    }
+    return raceNow() === n;
+  };
+
+  const done = (races, track, total) => {
+    const all = races.flatMap(r => r.entrants);
+    const found = all.filter(e => e.found).length;
+    const single = races.length === 1;
+    const list = single
+      ? races[0].entrants.map(e => `#${html(e.pp)} ${html(e.horse)}${e.scratched ? ' (SCR)' : ''}: ` +
+          (e.found ? `${e.starts}-${e.wins}-${e.places}-${e.shows}` : '<span style="color:#FF5C6C">no record</span>')).join('<br>')
+      : races.map(r => { const f = r.entrants.filter(e => e.found).length; return `Race ${r.race}: ${r.entrants.length} horses` +
+          (f < r.entrants.length ? ` <span style="color:#FF5C6C">(${r.entrants.length - f} without a record)</span>` : ''); }).join('<br>');
+    show(`<div>Read ${found} of ${all.length} records${single ? '' : ` across ${races.length} races`}.</div>` +
       `<label style="display:block;margin-top:10px;font-size:12px;color:#9C92BC">Track<input id="mc-track" style="${field}" value="${html(track)}"></label>` +
-      `<label style="display:block;margin-top:8px;font-size:12px;color:#9C92BC">Race<input id="mc-race" type="number" min="1" max="15" style="${field}" value="${race}"></label>` +
-      `<div style="margin-top:10px;font-size:12px;color:#9C92BC">${out.map(e => `#${html(e.pp)} ${html(e.horse)}${e.scratched ? ' (SCR)' : ''}: ` +
-        (e.found ? `${e.starts}-${e.wins}-${e.places}-${e.shows}` : '<span style="color:#FF5C6C">no record</span>')).join('<br>')}</div>` +
+      (single ? `<label style="display:block;margin-top:8px;font-size:12px;color:#9C92BC">Race<input id="mc-race" type="number" min="1" max="15" style="${field}" value="${races[0].race || ''}"></label>` : '') +
+      note(list) +
       `<a id="mc-send" href="#" target="mejiro" style="display:inline-block;margin:10px 6px 0 0;padding:8px 12px;border-radius:8px;` +
       `background:#7B61FF;color:#fff;font:600 13px system-ui;text-decoration:none">Send to Mejiro</a>` + button('mc-close', 'Close') +
-      (found < out.length ? '<div style="margin-top:12px;font-size:12px;color:#9C92BC">Records missing? Open one horse\'s record by hand ' +
-        '(click its name), then copy the page outline and paste it to Claude.</div>' + button('mc-copy', 'Copy page outline') : ''));
+      (found < all.length ? note('Records missing? Open one horse\'s record by hand (click its name), then copy the page outline and paste it to Claude.') + button('mc-copy', 'Copy page outline') : ''));
     box.querySelector('#mc-close').onclick = finish;
-    const copyBtn = box.querySelector('#mc-copy');
-    if (copyBtn) copyBtn.onclick = () => navigator.clipboard.writeText(outline()).then(() => { copyBtn.textContent = 'Copied'; });
+    copyButton();
     const send = box.querySelector('#mc-send');
     send.onclick = () => {
-      const name = clean(box.querySelector('#mc-track').value), n = +box.querySelector('#mc-race').value;
-      if (!name || !(n >= 1 && n <= 15)) { alert('Enter the track and a race number from 1 to 15.'); return false; }
+      const name = clean(box.querySelector('#mc-track').value);
+      const raceField = box.querySelector('#mc-race');
+      if (raceField) races[0].race = +raceField.value;
+      if (!name || races.some(r => !(r.race >= 1 && r.race <= 15))) { alert('Enter the track and a race number from 1 to 15.'); return false; }
       const now = new Date(), date = new Date(now - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
       send.href = site + '#capture=' + encodeURIComponent(JSON.stringify(
-        { v: 1, source: 'twinspires', date, track: name, race: n, total, capturedAt: now.toISOString(), entrants: out }));
+        { v: 2, source: 'twinspires', date, track: name, total, capturedAt: now.toISOString(), races }));
       setTimeout(finish, 500);
     };
-  })();
+  };
+
+  const first = findRunners();
+  if (!first || !first.length) {
+    show("Couldn't find the runners on this page. Open a race's <b>PROGRAM</b> tab and try again." +
+      note('If it still fails, copy the page outline and paste it to Claude.') + button('mc-copy', 'Copy page outline', true) + button('mc-close', 'Close'));
+    copyButton();
+    box.querySelector('#mc-close').onclick = finish;
+    return;
+  }
+  const track = trackName(), start = raceNow();
+  show(`<div><b>${html(track) || 'This track'}</b>${start ? ` · Race ${start}` : ''}: ${first.length} runners.</div>` +
+    button('mc-one', 'This race', true) + button('mc-all', 'All races') + button('mc-close', 'Close') +
+    note('<b>All races</b> goes back to Race 1, then reads every race on the card (about a second per horse). Leave this tab open while it works.'));
+  box.querySelector('#mc-close').onclick = finish;
+  box.querySelector('#mc-one').onclick = async () => {
+    const entrants = await readRace('');
+    done([{ race: start, entrants: entrants || [] }], track, null);
+  };
+  box.querySelector('#mc-all').onclick = async () => {
+    const races = [];
+    let n = raceNow() || 1;
+    while (n > 1) {
+      show(`Going back to Race ${n - 1}…`);
+      if (!await goTo(n - 1)) break;
+      n = raceNow();
+    }
+    let total = null;
+    while (races.length < 15) {
+      const entrants = await readRace(`Race ${n}: `);
+      if (entrants) races.push({ race: n, entrants });
+      if (!raceButton(n + 1)) { total = n; break; }  /* no next-race button: this is the last race */
+      show(`Opening Race ${n + 1}…`);
+      if (!await goTo(n + 1)) break;
+      n = raceNow();
+      if (races.some(r => r.race === n)) break;
+    }
+    done(races, track, total);
+  };
 }
 
 /* =========================================================
