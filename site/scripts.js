@@ -883,6 +883,13 @@ function mejiroCapture(site) {
   const up = (el, k) => { while (el && k-- > 0) el = el.parentElement; return el; };
   /* Text of each innermost element, separately: a row's textContent runs its cells together ("LIFE25203") */
   const cellTexts = el => [...el.querySelectorAll('*')].filter(c => !c.children.length).map(c => clean(c.textContent)).filter(Boolean);
+  /* A real mouse press: some pages listen for pointer or mouse down/up rather than click */
+  const press = el => {
+    const r = el.getBoundingClientRect(), at = { bubbles: true, cancelable: true, view: window, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, button: 0 };
+    ['pointerdown', 'mousedown', 'pointerup', 'mouseup'].forEach(type =>
+      el.dispatchEvent(type.startsWith('pointer') ? new PointerEvent(type, { ...at, pointerType: 'mouse', isPrimary: true }) : new MouseEvent(type, at)));
+    el.click();
+  };
 
   /* Each runner has a description like "Bay, Gelding, 4 yrs (KY) L" under its name */
   const DESC = /\b(colt|filly|mare|horse|gelding|ridgling)\b.*?\b\d{1,2}\s*yrs?\b/i;
@@ -896,15 +903,24 @@ function mejiroCapture(site) {
   }
 
   /* If the page isn't understood: the runner table's structure (no scripts, images or most attributes) for Claude */
+  /* Three parts: the runner list, an open LIFE panel if any, and the short texts near the top of the page */
   const outline = () => {
-    const anchor = leaves().find(el => /^runner$/i.test(clean(el.textContent))) || descs[0] || document.body;
-    const root = up(anchor, 8) || document.body;
-    const copy = root.cloneNode(true);
-    copy.querySelectorAll('script,style,svg,img,iframe,noscript,#mejiro-capture').forEach(n => n.remove());
-    copy.querySelectorAll('*').forEach(n => [...n.attributes].forEach(a => {
-      if (!['class', 'role', 'data-testid', 'aria-label'].includes(a.name)) n.removeAttribute(a.name);
-    }));
-    return copy.outerHTML.slice(0, 80000);
+    const strip = root => {
+      const copy = root.cloneNode(true);
+      copy.querySelectorAll('script,style,svg,img,iframe,noscript,#mejiro-capture').forEach(n => n.remove());
+      copy.querySelectorAll('*').forEach(n => [...n.attributes].forEach(a => {
+        if (!['class', 'id', 'role', 'aria-label', 'aria-expanded', 'href'].includes(a.name) && !a.name.startsWith('data-')) n.removeAttribute(a.name);
+      }));
+      return copy.outerHTML;
+    };
+    const anchor = (rows && rows[0]) || leaves().find(el => /^runner$/i.test(clean(el.textContent))) || descs[0];
+    const life = leaves().find(el => /^life$/i.test(clean(el.textContent)));
+    const top = leaves().filter(el => { const r = el.getBoundingClientRect(); return r.top < 320 && r.height > 0; })
+      .map(el => `${el.tagName.toLowerCase()}.${typeof el.className === 'string' ? el.className.trim().replace(/\s+/g, '.') : ''}: ${clean(el.textContent)}`)
+      .filter(t => !/:\s*$/.test(t)).slice(0, 120);
+    return ['<!-- RUNNER LIST -->', anchor ? strip(up(anchor, 2) || anchor) : '(not found)',
+      '<!-- LIFE PANEL -->', life ? strip(up(life, 8) || life) : '(no "LIFE" text on the page: open a horse\'s record by hand first)',
+      '<!-- TOP OF PAGE -->', top.join('\n')].join('\n').slice(0, 150000);
   };
 
   if (!rows || !rows.length) {
@@ -924,7 +940,7 @@ function mejiroCapture(site) {
     const nums = [...row.querySelectorAll('*')].filter(el => !el.children.length && /^\d{1,2}[A-Z]?$/.test(clean(el.textContent)))
       .sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
     const alt = ((row.querySelector('img[alt]') || {}).alt || '').match(/\b\d{1,2}[A-Z]?\b/);
-    return { nameEl, horse, pp: nums.length ? clean(nums[0].textContent) : alt ? alt[0] : String(i + 1), scratched: cellTexts(row).includes('SCR') };
+    return { row, nameEl, horse, pp: nums.length ? clean(nums[0].textContent) : alt ? alt[0] : String(i + 1), scratched: cellTexts(row).includes('SCR') };
   });
 
   /* A horse's LIFE row, read only from a panel that names that horse (not from the runner list) */
@@ -970,11 +986,13 @@ function mejiroCapture(site) {
       const r = runners[i];
       show(`Reading ${i + 1} of ${runners.length}: <b>${html(r.horse)}</b>…`);
       let life = lifeOf(r.horse);  /* already open */
-      if (!life) {
-        const target = r.nameEl.closest('a,button,[role="button"],[tabindex]') || r.nameEl;
+      /* Try the name's link or button, then the name itself, then the whole row, each with a full mouse press */
+      const targets = [r.nameEl.closest('a,button,[role="button"],[tabindex]'), r.nameEl, r.row].filter((t, k, a) => t && a.indexOf(t) === k);
+      for (const target of targets) {
+        if (life) break;
         target.scrollIntoView({ block: 'center' });
-        target.click();
-        for (let t = 0; t < (r.scratched ? 15 : 40) && !life; t++) { await sleep(150); life = lifeOf(r.horse); }
+        press(target);
+        for (let t = 0; t < (r.scratched ? 10 : 20) && !life; t++) { await sleep(150); life = lifeOf(r.horse); }
       }
       out.push(Object.assign({ pp: r.pp, horse: r.horse, scratched: r.scratched, found: !!life }, life || {}));
       await sleep(250);
@@ -986,8 +1004,12 @@ function mejiroCapture(site) {
       `<div style="margin-top:10px;font-size:12px;color:#9C92BC">${out.map(e => `#${html(e.pp)} ${html(e.horse)}${e.scratched ? ' (SCR)' : ''}: ` +
         (e.found ? `${e.starts}-${e.wins}-${e.places}-${e.shows}` : '<span style="color:#FF5C6C">no record</span>')).join('<br>')}</div>` +
       `<a id="mc-send" href="#" target="mejiro" style="display:inline-block;margin:10px 6px 0 0;padding:8px 12px;border-radius:8px;` +
-      `background:#7B61FF;color:#fff;font:600 13px system-ui;text-decoration:none">Send to Mejiro</a>` + button('mc-close', 'Close'));
+      `background:#7B61FF;color:#fff;font:600 13px system-ui;text-decoration:none">Send to Mejiro</a>` + button('mc-close', 'Close') +
+      (found < out.length ? '<div style="margin-top:12px;font-size:12px;color:#9C92BC">Records missing? Open one horse\'s record by hand ' +
+        '(click its name), then copy the page outline and paste it to Claude.</div>' + button('mc-copy', 'Copy page outline') : ''));
     box.querySelector('#mc-close').onclick = finish;
+    const copyBtn = box.querySelector('#mc-copy');
+    if (copyBtn) copyBtn.onclick = () => navigator.clipboard.writeText(outline()).then(() => { copyBtn.textContent = 'Copied'; });
     const send = box.querySelector('#mc-send');
     send.onclick = () => {
       const name = clean(box.querySelector('#mc-track').value), n = +box.querySelector('#mc-race').value;
