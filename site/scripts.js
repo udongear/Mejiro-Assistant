@@ -27,7 +27,8 @@ function freshState() {
   return {
     user: null,
     bets: [],
-    strategies: [],  // { id, text }, in display order
+    strategies: [],  // { id, text, category }, in display order; category is a strategyCategories id or ''
+    strategyCategories: [],  // { id, name }, in display order
     matrix: DEFAULT_MATRIX.map(t => ({ ...t })),
     settings: { ...DEFAULT_SETTINGS },
   };
@@ -50,7 +51,7 @@ function readLocalState() {
    users/{uid}/racecards/{date}    that day's races captured from TwinSpires (state.cards holds one day)
    save() is called after every change; it writes only what differs from the last sync. */
 
-const PREF_KEYS = ['settings', 'matrix', 'wrRange', 'strategies', 'wpsShown'];
+const PREF_KEYS = ['settings', 'matrix', 'wrRange', 'strategies', 'strategyCategories', 'wpsShown'];
 
 let fb = null;  // { auth, db } once Firebase is set up
 let synced = { prefs: '', bets: new Map(), cards: '' };  // last known Firestore copy (bet id → JSON)
@@ -373,6 +374,12 @@ function renderTrackSelects() {
   const hist = $('#histTrack'), hv = hist.value;
   hist.innerHTML = '<option value="">All tracks</option>' + betTracks.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
   hist.value = hv;
+
+  // History's wager types: every type the Tracker offers, plus any older ones found in your bets
+  const types = [...new Set([...BET_TYPES.map(([t]) => t), ...state.bets.map(b => b.type).filter(Boolean)])];
+  const ht = $('#histType'), tv = ht.value;
+  ht.innerHTML = '<option value="">All types</option>' + types.map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('');
+  ht.value = tv;
 }
 
 /* =========================================================
@@ -430,7 +437,11 @@ function renderTracker() {
 
 /* ----- Log bets: shared date & track, one row per bet ----- */
 
-const BET_TYPES = [['Win', '1st'], ['Place', '1st–2nd'], ['Show', '1st–3rd']];
+const BET_TYPES = [['Win', '1st'], ['Place', '1st–2nd'], ['Show', '1st–3rd'],
+  ['Exacta', '1st–2nd in order'], ['Trifecta', '1st–3rd in order'], ['Superfecta', '1st–4th in order'],
+  ['Pick 3', 'winners of 3 races'], ['Pick 5', 'winners of 5 races']];
+// What goes in "Horse #" for each kind of bet; Pick bets log the first leg's race
+const HORSE_HINTS = { Exacta: 'e.g. 3-5', Trifecta: 'e.g. 3-5-1', Superfecta: 'e.g. 3-5-1-2', 'Pick 3': 'e.g. 3/5/1', 'Pick 5': 'e.g. 3/5/1/2/7' };
 
 // Rows start blank; only the Database tab's "Log bet" passes values in
 function betRowHTML(prev = {}) {
@@ -476,6 +487,16 @@ $('#addBetRow').addEventListener('click', () => {
   $('#betRows').insertAdjacentHTML('beforeend', betRowHTML());
   updateBetRows();
   $$('#betRows tr').pop().querySelector('[name=race]').focus();
+});
+
+// Exotic bets take several horses ("3-5-1"), so the Horse # box hints at the format and offers a full keyboard
+$('#betRows').addEventListener('change', e => {
+  if (e.target.name !== 'type') return;
+  const horse = e.target.closest('tr').querySelector('[name=horse]');
+  horse.placeholder = HORSE_HINTS[e.target.value] || '#';
+  horse.inputMode = HORSE_HINTS[e.target.value] ? 'text' : 'numeric';
+  horse.classList.toggle('w-sm', !!HORSE_HINTS[e.target.value]);
+  horse.classList.toggle('w-xs', !HORSE_HINTS[e.target.value]);
 });
 
 $('#betRows').addEventListener('change', e => {
@@ -640,6 +661,8 @@ function renderRaces() {
       </div>`;
   }).join('');
 
+  $('#exoticCard').classList.toggle('hidden', !tracks.length);
+
   const track = tracks.find(x => x.key === racesView.key);
   if (!track) {
     $('#racesTitle').textContent = 'Entrants';
@@ -711,6 +734,13 @@ $('#racesTracks').addEventListener('click', async e => {
   racesView.key = b.dataset.key;
   racesView.race = firstRace(racesTracks(today()).find(x => x.key === b.dataset.key));
   renderRaces();
+});
+
+// Exotic Wagering tiles are placeholders until their calculators are worked out
+$('#exoticCard').addEventListener('click', e => {
+  if (!e.target.closest('.exotic-tile')) return;
+  e.preventDefault();
+  toast('Coming soon');
 });
 
 $('#racesCalc').addEventListener('click', e => {
@@ -1258,35 +1288,67 @@ function mejiroCapture(site) {
 }
 
 /* =========================================================
-   Strategies — short notes, reordered by dragging the ☰ handle
+   Strategies — short notes, grouped by categories you name (Edit categories).
+   Drag the ☰ handle to reorder within a group; a note's menu moves it to another category.
    ========================================================= */
 
+const strategyById = id => state.strategies.find(s => s.id === id);
+const categories = () => state.strategyCategories || [];
+
 function renderStrategies() {
-  $('#strategyList').innerHTML = (state.strategies || []).map(s => `
-    <li class="strategy" data-id="${s.id}">
-      <button type="button" class="drag-handle" title="Drag to reorder" aria-label="Drag to reorder">☰</button>
-      <textarea rows="2" placeholder="Describe a strategy…">${esc(s.text)}</textarea>
-      <button type="button" class="btn tiny-btn ghost danger" data-delete-strategy title="Delete">✕</button>
-    </li>`).join('') || '<li class="empty">No strategies yet. Click <b>+ Add strategy</b> to write one.</li>';
+  const cats = categories();
+  const known = new Set(cats.map(c => c.id));
+  const notes = state.strategies || [];
+  // One group per category, then Uncategorized (shown when it has notes, or before any category exists)
+  const groups = [...cats, { id: '', name: cats.length ? 'Uncategorized' : 'Your strategies' }];
+  const inGroup = g => notes.filter(s => (known.has(s.category) ? s.category : '') === g.id);
+  const catSelect = s => `<select class="strategy-cat" aria-label="Category"><option value="">Uncategorized</option>${cats.map(c =>
+    `<option value="${esc(c.id)}" ${s.category === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select>`;
+  $('#strategyGroups').innerHTML = groups.filter(g => g.id || inGroup(g).length || !cats.length).map(g => `
+    <div class="card strategy-group">
+      <div class="card-head">
+        <h3>${esc(g.name)} <span class="muted small-text">${inGroup(g).length || ''}</span></h3>
+        <button type="button" class="btn tiny-btn" data-add-strategy="${esc(g.id)}">+ Add</button>
+      </div>
+      <ul class="strategy-list">${inGroup(g).map(s => `
+        <li class="strategy" data-id="${s.id}">
+          <button type="button" class="drag-handle" title="Drag to reorder" aria-label="Drag to reorder">☰</button>
+          <textarea rows="2" placeholder="Describe a strategy…">${esc(s.text)}</textarea>
+          <div class="strategy-side">
+            ${cats.length ? catSelect(s) : ''}
+            <button type="button" class="btn tiny-btn ghost danger" data-delete-strategy title="Delete">✕</button>
+          </div>
+        </li>`).join('') || `<li class="empty">${notes.length ? 'Nothing here yet.' : 'No strategies yet. Click <b>+ Add strategy</b> to write one.'}</li>`}</ul>
+    </div>`).join('');
 }
 
-const strategyById = id => state.strategies.find(s => s.id === id);
-
-$('#addStrategy').addEventListener('click', () => {
-  state.strategies = [...(state.strategies || []), { id: uid(), text: '' }];
+function addStrategy(category) {
+  const s = { id: uid(), text: '', category };
+  state.strategies = [...(state.strategies || []), s];
   save();
   renderStrategies();
-  $$('#strategyList textarea').pop().focus();
-});
+  $(`.strategy[data-id="${s.id}"] textarea`).focus();
+}
+
+$('#addStrategy').addEventListener('click', () => addStrategy(''));
 
 // Typing saves without re-rendering, so the cursor stays put
-$('#strategyList').addEventListener('input', e => {
+$('#strategyGroups').addEventListener('input', e => {
   if (e.target.tagName !== 'TEXTAREA') return;
   strategyById(e.target.closest('.strategy').dataset.id).text = e.target.value;
   save();
 });
 
-$('#strategyList').addEventListener('click', async e => {
+$('#strategyGroups').addEventListener('change', e => {
+  if (!e.target.classList.contains('strategy-cat')) return;
+  strategyById(e.target.closest('.strategy').dataset.id).category = e.target.value;
+  save();
+  renderStrategies();
+});
+
+$('#strategyGroups').addEventListener('click', async e => {
+  const add = e.target.closest('[data-add-strategy]');
+  if (add) return addStrategy(add.dataset.addStrategy);
   if (!e.target.closest('[data-delete-strategy]')) return;
   const s = strategyById(e.target.closest('.strategy').dataset.id);
   if (s.text.trim() && !await confirmModal('Delete strategy?', 'This removes it permanently.', 'Delete', true)) return;
@@ -1295,14 +1357,48 @@ $('#strategyList').addEventListener('click', async e => {
   renderStrategies();
 });
 
+// Add, rename and delete categories; changes apply on Save. A deleted category's strategies become Uncategorized.
+function openCategoryEditor() {
+  const draft = categories().map(c => ({ ...c }));
+  const draw = () => {
+    openModal(`
+      <h3>Edit categories</h3>
+      <p class="muted small-text">Group your strategies however you like: Wins, Exactas, Pick 5s… Deleting a category moves its strategies to Uncategorized.</p>
+      <ul class="cat-list">${draft.map((c, i) => `
+        <li><input type="text" data-i="${i}" value="${esc(c.name)}" placeholder="Category name" maxlength="40">
+          <button type="button" class="btn tiny-btn ghost danger" data-del="${i}" title="Delete category">✕</button></li>`).join('')
+        || '<li class="empty">No categories yet.</li>'}</ul>
+      <button class="btn" id="catAdd" type="button">+ Add category</button>
+      <div class="modal-actions">
+        <button class="btn ghost" id="catCancel" type="button">Cancel</button>
+        <button class="btn primary" id="catSave" type="button">Save</button>
+      </div>`);
+    $$('.cat-list input').forEach(inp => { inp.oninput = () => { draft[+inp.dataset.i].name = inp.value; }; });
+    $$('.cat-list [data-del]').forEach(b => { b.onclick = () => { draft.splice(+b.dataset.del, 1); draw(); }; });
+    $('#catAdd').onclick = () => { draft.push({ id: uid(), name: '' }); draw(); $$('.cat-list input').pop().focus(); };
+    $('#catCancel').onclick = closeModal;
+    $('#catSave').onclick = () => {
+      state.strategyCategories = draft.map(c => ({ id: c.id, name: c.name.trim() })).filter(c => c.name);
+      const ids = new Set(state.strategyCategories.map(c => c.id));
+      (state.strategies || []).forEach(s => { if (s.category && !ids.has(s.category)) s.category = ''; });
+      save();
+      renderStrategies();
+      closeModal();
+    };
+  };
+  draw();
+}
+
+$('#editCategories').addEventListener('click', openCategoryEditor);
+
 // Drag with pointer events (works with mouse and touch): the row follows the handle,
-// and the list reorders as it passes other rows
-$('#strategyList').addEventListener('pointerdown', e => {
+// and its group's list reorders as it passes other rows
+$('#strategyGroups').addEventListener('pointerdown', e => {
   const handle = e.target.closest('.drag-handle');
   if (!handle) return;
   e.preventDefault();
   const row = handle.closest('.strategy');
-  const list = $('#strategyList');
+  const list = row.closest('.strategy-list');
   row.classList.add('dragging');
   try { handle.setPointerCapture(e.pointerId); } catch (err) { /* capture is a nicety; dragging still works */ }
 
@@ -1315,7 +1411,7 @@ $('#strategyList').addEventListener('pointerdown', e => {
   const end = () => {
     handle.removeEventListener('pointermove', move);
     row.classList.remove('dragging');
-    const order = [...list.children].map(li => li.dataset.id);
+    const order = $$('#strategyGroups .strategy').map(li => li.dataset.id);
     state.strategies = order.map(strategyById).filter(Boolean);
     save();
   };
@@ -1425,10 +1521,10 @@ $('#matrixReset').addEventListener('click', async () => {
 function horseLabel(h) { return /^\d+[A-Z]?$/i.test(String(h).trim()) ? '#' + String(h).trim().toUpperCase() : h; }
 
 function historyRows() {
-  const track = $('#histTrack').value, result = $('#histResult').value;
+  const track = $('#histTrack').value, type = $('#histType').value, result = $('#histResult').value;
   const from = $('#histFrom').value, to = $('#histTo').value;
   return state.bets
-    .filter(b => (!track || b.track === track) && (!result || b.status === result) && (!from || b.date >= from) && (!to || b.date <= to))
+    .filter(b => (!track || b.track === track) && (!type || b.type === type) && (!result || b.status === result) && (!from || b.date >= from) && (!to || b.date <= to))
     .sort((a, b) => a.date.localeCompare(b.date) || num(a.race) - num(b.race) || (a.settledAt || '').localeCompare(b.settledAt || ''));
 }
 
@@ -1478,7 +1574,7 @@ function renderHistory() {
     <tbody>${body || '<tr><td colspan="11" class="empty">No bets logged yet. Log one from the Tracker.</td></tr>'}</tbody>`;
 }
 
-['#histTrack', '#histResult', '#histFrom', '#histTo'].forEach(id => $(id).addEventListener('change', renderHistory));
+['#histTrack', '#histType', '#histResult', '#histFrom', '#histTo'].forEach(id => $(id).addEventListener('change', renderHistory));
 
 $('#histTable').addEventListener('click', async e => {
   const del = e.target.closest('[data-delete]');

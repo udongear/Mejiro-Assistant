@@ -114,6 +114,20 @@
             <div id="racesCalc"></div>
           </div>
         </div>
+        <!-- Shown once today's tracks are scraped. Placeholders: each will become a calculator built on the scraped records. -->
+        <div class="card exotic-card hidden" id="exoticCard">
+          <div class="card-head">
+            <h3>Exotic Wagering</h3>
+            <span class="muted small-text">Calculators coming soon</span>
+          </div>
+          <div class="exotic-grid">
+            <a href="#" class="exotic-tile" aria-disabled="true"><b>Exacta</b><span>1st and 2nd, in order</span></a>
+            <a href="#" class="exotic-tile" aria-disabled="true"><b>Trifecta</b><span>1st, 2nd and 3rd, in order</span></a>
+            <a href="#" class="exotic-tile" aria-disabled="true"><b>Superfecta</b><span>1st through 4th, in order</span></a>
+            <a href="#" class="exotic-tile" aria-disabled="true"><b>Pick 3</b><span>Winners of 3 races in a row</span></a>
+            <a href="#" class="exotic-tile" aria-disabled="true"><b>Pick 5</b><span>Winners of 5 races in a row</span></a>
+          </div>
+        </div>
       </section>
 
       <!-- ---------- STRATEGIES ---------- -->
@@ -121,12 +135,11 @@
         <header class="tab-head">
           <h2>Strategies</h2>
           <div class="head-actions">
+            <button class="btn ghost" id="editCategories" type="button">Edit categories</button>
             <button class="btn primary" id="addStrategy" type="button">+ Add strategy</button>
           </div>
         </header>
-        <div class="card">
-          <ul class="strategy-list" id="strategyList"></ul>
-        </div>
+        <div id="strategyGroups"></div>
       </section>
 
       <!-- ---------- RISK MATRIX ---------- -->
@@ -164,6 +177,7 @@
         </header>
         <div class="toolbar">
           <label>Track<select id="histTrack"><option value="">All tracks</option></select></label>
+          <label>Wager type<select id="histType"><option value="">All types</option></select></label>
           <label>Result
             <select id="histResult">
               <option value="">All</option><option value="won">Won</option>

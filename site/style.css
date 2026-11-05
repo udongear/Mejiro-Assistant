@@ -242,6 +242,29 @@ input[type="date"] { color-scheme: dark; }
 .drag-handle:hover { color: var(--lavender); background: var(--surface); }
 .strategy.dragging .drag-handle { cursor: grabbing; }
 .strategy .btn { margin-top: 6px; }
+.strategy-group .card-head { margin-bottom: 12px; }
+.strategy-group .card-head h3 .small-text { font-weight: 400; margin-left: 4px; }
+.strategy-list .empty { color: var(--muted); font-size: 13px; padding: 4px 2px; }
+.strategy-side { display: flex; align-items: flex-start; gap: 6px; }
+.strategy-cat { width: 150px; padding: 6px 8px; font-size: 13px; margin-top: 4px; }
+.cat-list { list-style: none; margin: 12px 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.cat-list li { display: flex; align-items: center; gap: 8px; }
+.cat-list .empty { color: var(--muted); font-size: 13px; }
+@media (max-width: 640px) {
+  .strategy { flex-wrap: wrap; }
+  .strategy textarea { flex-basis: calc(100% - 40px); }
+  .strategy-side { width: 100%; justify-content: flex-end; }
+}
+
+/* Today's Races: Exotic Wagering (placeholders until the calculators exist) */
+.exotic-card { margin-top: 16px; }
+.exotic-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
+.exotic-tile {
+  display: flex; flex-direction: column; gap: 4px; padding: 14px; border-radius: 10px;
+  background: var(--surface-2); border: 1px dashed var(--border); color: var(--text); text-decoration: none; cursor: default;
+}
+.exotic-tile b { color: var(--lavender); font-size: 15px; }
+.exotic-tile span { color: var(--muted); font-size: 12px; }
 
 /* Tracker: log bets */
 .bet-shared { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
