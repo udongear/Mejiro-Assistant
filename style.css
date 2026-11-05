@@ -320,7 +320,8 @@ input[type="date"] { color-scheme: dark; }
   background: var(--surface-2); border: 1px dashed var(--border); color: var(--text); text-decoration: none; cursor: default;
 }
 .exotic-tile b { color: var(--lavender); font-size: 15px; }
-.exotic-tile span { color: var(--muted); font-size: 12px; }
+.exotic-tile .tile-desc { color: var(--muted); font-size: 12px; }
+.exotic-tile .stars { font-size: 13px; letter-spacing: 1px; }
 
 /* Tracker: log bets */
 .bet-shared { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }

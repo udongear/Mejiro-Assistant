@@ -666,6 +666,9 @@ function renderRaces() {
   }).join('');
 
   $('#exoticCard').classList.toggle('hidden', !tracks.length);
+  // Easiest to hardest, by the same difficulty stars as the Risk Matrix's exotic wager table
+  $('#exoticTiles').innerHTML = [...EXOTIC_INFO].sort((a, b) => a.stars - b.stars).map(d => `
+    <a href="#" class="exotic-tile" aria-disabled="true"><b>${esc(d.name)}</b>${starsHTML(d.stars)}<span class="tile-desc">${esc(d.short)}</span></a>`).join('');
 
   const track = tracks.find(x => x.key === racesView.key);
   if (!track) {
@@ -1548,19 +1551,21 @@ $('#editTiers').addEventListener('click', openTierEditor);
      Break-even        = how often a min-bet ticket must hit to pay for itself: 1 in ROI ----- */
 
 const STAR_MAX = 6;
+const starsHTML = n => `<span class="stars" title="${n} of ${STAR_MAX}" aria-label="${n} of ${STAR_MAX} stars">${'★'.repeat(n)}<span class="off">${'★'.repeat(STAR_MAX - n)}</span></span>`;
 const EXOTIC_INFO = [
   // kind: vertical = several finishers in one race; horizontal = one winner in each of several races
-  { name: 'Exacta', kind: 'vertical', legs: 2, stars: 1, min: 1, payout: 30,
+  // short: the one-liner on Today's Races' Exotic Wagering tiles
+  { name: 'Exacta', kind: 'vertical', legs: 2, stars: 1, min: 1, payout: 30, short: '1st and 2nd, in order',
     about: 'Pick the horses that finish 1st and 2nd, in that exact order. A "box" covers both orders for twice the cost.' },
-  { name: 'Pick 3', kind: 'horizontal', legs: 3, stars: 2, min: 0.5, payout: 40,
+  { name: 'Pick 3', kind: 'horizontal', legs: 3, stars: 2, min: 0.5, payout: 40, short: 'Winners of 3 races in a row',
     about: 'Pick the winner of 3 races in a row on one ticket, placed before the first of them. More horses per race means more combinations, and the cost multiplies.' },
-  { name: 'Trifecta', kind: 'vertical', legs: 3, stars: 3, min: 0.5, payout: 100,
+  { name: 'Trifecta', kind: 'vertical', legs: 3, stars: 3, min: 0.5, payout: 100, short: '1st, 2nd and 3rd, in order',
     about: 'Pick the horses that finish 1st, 2nd and 3rd, in that exact order. Boxing 3 horses covers all 6 orders for 6× the cost.' },
-  { name: 'Superfecta', kind: 'vertical', legs: 4, stars: 4, min: 0.1, payout: 150,
+  { name: 'Superfecta', kind: 'vertical', legs: 4, stars: 4, min: 0.1, payout: 150, short: '1st through 4th, in order',
     about: 'Pick the horses that finish 1st through 4th, in that exact order. Usually played for 10¢ with several horses boxed, since one exact order rarely hits.' },
-  { name: 'Pick 5', kind: 'horizontal', legs: 5, stars: 5, min: 0.5, payout: 1000,
+  { name: 'Pick 5', kind: 'horizontal', legs: 5, stars: 5, min: 0.5, payout: 1000, short: 'Winners of 5 races in a row',
     about: 'Pick the winners of 5 races in a row on one ticket. When nobody hits all five, the pool often carries over to the next day, which is how the big payouts build.' },
-  { name: 'Super High Five', kind: 'vertical', legs: 5, stars: 6, min: 0.2, payout: 1500,
+  { name: 'Super High Five', kind: 'vertical', legs: 5, stars: 6, min: 0.2, payout: 1500, short: '1st through 5th, in order',
     about: 'Pick the horses that finish 1st through 5th, in that exact order. Some tracks run it as a jackpot: the whole pool pays only when exactly one ticket hits, otherwise most of it carries over.' },
 ];
 const EXOTIC_COLS = [
@@ -1602,7 +1607,7 @@ function renderExoticTable() {
       <tr>
         <td class="bet-cell ${r.kind}"><span class="bet-name" tabindex="0" data-about="${esc(r.name)}"><b>${esc(r.name)}</b><span class="info-dot" aria-hidden="true">i</span></span>
           <span class="kind-tag ${r.kind}">${r.kind === 'vertical' ? 'Vertical' : 'Horizontal'}</span></td>
-        <td><span class="stars" title="${r.stars} of ${STAR_MAX}" aria-label="${r.stars} of ${STAR_MAX} stars">${'★'.repeat(r.stars)}<span class="off">${'★'.repeat(STAR_MAX - r.stars)}</span></span></td>
+        <td>${starsHTML(r.stars)}</td>
         <td class="num">${field(r, 'min')}</td>
         <td class="num">${field(r, 'payout')}</td>
         <td class="num"><div class="roi-cell"><span class="roi-track"><span style="width:${r.roi > 1 ? Math.log10(r.roi) / top * 100 : 0}%"></span></span>
