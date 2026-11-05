@@ -29,6 +29,7 @@ function freshState() {
     bets: [],
     strategies: [],  // { id, text, category }, in display order; category is a strategyCategories id or ''
     strategyCategories: [],  // { id, name }, in display order
+    exoticInfo: {},  // your edits to the Risk Matrix's exotic wager table: { "Exacta": { min, payout } }
     matrix: DEFAULT_MATRIX.map(t => ({ ...t })),
     settings: { ...DEFAULT_SETTINGS },
   };
@@ -51,7 +52,7 @@ function readLocalState() {
    users/{uid}/racecards/{date}    that day's races captured from TwinSpires (state.cards holds one day)
    save() is called after every change; it writes only what differs from the last sync. */
 
-const PREF_KEYS = ['settings', 'matrix', 'wrRange', 'strategies', 'strategyCategories', 'wpsShown'];
+const PREF_KEYS = ['settings', 'matrix', 'wrRange', 'strategies', 'strategyCategories', 'wpsShown', 'exoticInfo', 'exoticField'];
 
 let fb = null;  // { auth, db } once Firebase is set up
 let synced = { prefs: '', bets: new Map(), cards: '' };  // last known Firestore copy (bet id → JSON)
@@ -350,6 +351,7 @@ function renderAll() {
   renderRaces();
   renderStrategies();
   renderMatrix();
+  renderExoticTable();
   renderHistory();
   renderSettings();
 }
@@ -439,9 +441,10 @@ function renderTracker() {
 
 const BET_TYPES = [['Win', '1st'], ['Place', '1st–2nd'], ['Show', '1st–3rd'],
   ['Exacta', '1st–2nd in order'], ['Trifecta', '1st–3rd in order'], ['Superfecta', '1st–4th in order'],
-  ['Pick 3', 'winners of 3 races'], ['Pick 5', 'winners of 5 races']];
+  ['Super High Five', '1st–5th in order'], ['Pick 3', 'winners of 3 races'], ['Pick 5', 'winners of 5 races']];
 // What goes in "Horse #" for each kind of bet; Pick bets log the first leg's race
-const HORSE_HINTS = { Exacta: 'e.g. 3-5', Trifecta: 'e.g. 3-5-1', Superfecta: 'e.g. 3-5-1-2', 'Pick 3': 'e.g. 3/5/1', 'Pick 5': 'e.g. 3/5/1/2/7' };
+const HORSE_HINTS = { Exacta: 'e.g. 3-5', Trifecta: 'e.g. 3-5-1', Superfecta: 'e.g. 3-5-1-2', 'Super High Five': 'e.g. 3-5-1-2-7',
+  'Pick 3': 'e.g. 3/5/1', 'Pick 5': 'e.g. 3/5/1/2/7' };
 
 // Rows start blank; only the Database tab's "Log bet" passes values in
 function betRowHTML(prev = {}) {
@@ -1511,6 +1514,127 @@ $('#matrixReset').addEventListener('click', async () => {
   if (!await confirmModal('Reset risk matrix?', 'Restores the original 12 tiers.', 'Reset')) return;
   state.matrix = DEFAULT_MATRIX.map(t => ({ ...t }));
   save(); renderMatrix(); renderTracker();
+});
+
+/* ----- Exotic wagers at a glance: a sortable reference table. Difficulty is a fixed 1–6 ranking
+   (no two bets share one); min bet and average payout start as ballpark defaults you can edit.
+     ROI               = average payout ÷ min bet
+     Possible outcomes = every result with N horses per race: N×(N−1)×… for a vertical bet's
+                         `legs` places, N^legs for a horizontal bet's `legs` races
+     Break-even        = how often a min-bet ticket must hit to pay for itself: 1 in ROI ----- */
+
+const STAR_MAX = 6;
+const EXOTIC_INFO = [
+  // kind: vertical = several finishers in one race; horizontal = one winner in each of several races
+  { name: 'Exacta', kind: 'vertical', legs: 2, stars: 1, min: 1, payout: 30,
+    about: 'Pick the horses that finish 1st and 2nd, in that exact order. A "box" covers both orders for twice the cost.' },
+  { name: 'Pick 3', kind: 'horizontal', legs: 3, stars: 2, min: 0.5, payout: 40,
+    about: 'Pick the winner of 3 races in a row on one ticket, placed before the first of them. More horses per race means more combinations, and the cost multiplies.' },
+  { name: 'Trifecta', kind: 'vertical', legs: 3, stars: 3, min: 0.5, payout: 100,
+    about: 'Pick the horses that finish 1st, 2nd and 3rd, in that exact order. Boxing 3 horses covers all 6 orders for 6× the cost.' },
+  { name: 'Superfecta', kind: 'vertical', legs: 4, stars: 4, min: 0.1, payout: 150,
+    about: 'Pick the horses that finish 1st through 4th, in that exact order. Usually played for 10¢ with several horses boxed, since one exact order rarely hits.' },
+  { name: 'Pick 5', kind: 'horizontal', legs: 5, stars: 5, min: 0.5, payout: 1000,
+    about: 'Pick the winners of 5 races in a row on one ticket. When nobody hits all five, the pool often carries over to the next day, which is how the big payouts build.' },
+  { name: 'Super High Five', kind: 'vertical', legs: 5, stars: 6, min: 0.2, payout: 1500,
+    about: 'Pick the horses that finish 1st through 5th, in that exact order. Some tracks run it as a jackpot: the whole pool pays only when exactly one ticket hits, otherwise most of it carries over.' },
+];
+const EXOTIC_COLS = [
+  ['name', 'Bet name'], ['stars', 'Difficulty to land'], ['min', 'Min bet'], ['payout', 'Avg payout'], ['roi', 'ROI (payout ÷ min bet)'],
+  ['outcomes', 'Possible outcomes', 'Every possible result with this many horses in each race'],
+  ['breakeven', 'Break-even', 'How often a min-bet ticket has to hit to pay for itself at the average payout'],
+];
+let exoticSort = { key: 'stars', dir: 1 };
+let exoticEditing = false;
+
+const fieldSize = () => Math.min(14, Math.max(5, Math.round(num(state.exoticField) || 10)));
+// N×(N−1)×… for places in one race; N×N×… for winners of separate races
+const outcomes = (kind, legs, n) => kind === 'vertical'
+  ? Array.from({ length: legs }, (_, i) => n - i).reduce((p, x) => p * Math.max(0, x), 1)
+  : n ** legs;
+
+const exoticRows = () => EXOTIC_INFO.map(d => {
+  const mine = (state.exoticInfo || {})[d.name] || {};
+  const min = mine.min ?? d.min, payout = mine.payout ?? d.payout;
+  const roi = min > 0 ? payout / min : 0;
+  return { ...d, min, payout, roi, outcomes: outcomes(d.kind, d.legs, fieldSize()), breakeven: roi ? 1 / roi : Infinity };
+});
+
+function renderExoticTable() {
+  const { key, dir } = exoticSort;
+  const rows = exoticRows().sort((a, b) => (key === 'name' ? a.name.localeCompare(b.name) : a[key] - b[key]) * dir || a.name.localeCompare(b.name));
+  $('#exoticField').value = fieldSize();
+  // ROI spans 30× to several thousand ×, so its bars use a log scale
+  const top = Math.log10(Math.max(10, ...rows.map(r => r.roi)));
+  const pct = v => v >= 0.01 ? (v * 100).toFixed(1) + '%' : (v * 100).toFixed(2) + '%';
+  const field = (r, f) => exoticEditing
+    ? `<input type="number" class="w-sm" min="0" step="0.01" data-exotic="${esc(r.name)}" data-field="${f}" value="${r[f]}" aria-label="${esc(r.name)} ${f === 'min' ? 'min bet' : 'average payout'}">`
+    : money(r[f]);
+  $('#exoticTable').innerHTML = `
+    <thead><tr>${EXOTIC_COLS.map(([k, label, hint]) => `
+      <th class="${k === 'name' || k === 'stars' ? '' : 'num'}" aria-sort="${k === key ? (dir > 0 ? 'ascending' : 'descending') : 'none'}">
+        <button type="button" class="sort-btn ${k === key ? 'active' : ''}" data-sort="${k}" ${hint ? `title="${esc(hint)}"` : ''}>${label}<span class="sort-arrow">${k === key ? (dir > 0 ? '▲' : '▼') : '↕'}</span></button></th>`).join('')}</tr></thead>
+    <tbody>${rows.map(r => `
+      <tr>
+        <td class="bet-cell ${r.kind}"><span class="bet-name" tabindex="0" data-about="${esc(r.name)}"><b>${esc(r.name)}</b><span class="info-dot" aria-hidden="true">i</span></span>
+          <span class="kind-tag ${r.kind}">${r.kind === 'vertical' ? 'Vertical' : 'Horizontal'}</span></td>
+        <td><span class="stars" title="${r.stars} of ${STAR_MAX}" aria-label="${r.stars} of ${STAR_MAX} stars">${'★'.repeat(r.stars)}<span class="off">${'★'.repeat(STAR_MAX - r.stars)}</span></span></td>
+        <td class="num">${field(r, 'min')}</td>
+        <td class="num">${field(r, 'payout')}</td>
+        <td class="num"><div class="roi-cell"><span class="roi-track"><span style="width:${r.roi > 1 ? Math.log10(r.roi) / top * 100 : 0}%"></span></span>
+          <b>${Math.round(r.roi).toLocaleString()}×</b></div></td>
+        <td class="num">${r.outcomes ? r.outcomes.toLocaleString() : '—'}</td>
+        <td class="num">${r.roi ? `1 in ${Math.round(r.roi).toLocaleString()} <span class="muted tiny">(${pct(r.breakeven)})</span>` : '—'}</td>
+      </tr>`).join('')}</tbody>`;
+  $('#exoticEdit').textContent = exoticEditing ? 'Done' : 'Edit numbers';
+}
+
+// Same column again flips the order; a new column starts ascending
+$('#exoticTable').addEventListener('click', e => {
+  const b = e.target.closest('[data-sort]');
+  if (!b) return;
+  exoticSort = { key: b.dataset.sort, dir: exoticSort.key === b.dataset.sort ? -exoticSort.dir : 1 };
+  renderExoticTable();
+});
+
+// What each bet is: on hover, or on focus (tapping on a phone, Tab on a keyboard)
+const showAbout = e => {
+  const el = e.target.closest('[data-about]');
+  if (!el) return;
+  const d = EXOTIC_INFO.find(x => x.name === el.dataset.about);
+  const r = el.getBoundingClientRect();
+  showTip(`<b>${esc(d.name)} <span class="kind-tag ${d.kind}">${d.kind === 'vertical' ? 'Vertical' : 'Horizontal'}</span></b>${esc(d.about)}`,
+    r.left + r.width / 2, r.top);
+};
+const hideAbout = e => { if (e.target.closest('[data-about]')) hideTip(); };
+$('#exoticTable').addEventListener('mouseover', showAbout);
+$('#exoticTable').addEventListener('focusin', showAbout);
+$('#exoticTable').addEventListener('mouseout', hideAbout);
+$('#exoticTable').addEventListener('focusout', hideAbout);
+
+$('#exoticTable').addEventListener('change', e => {
+  const inp = e.target.closest('[data-exotic]');
+  if (!inp) return;
+  const info = { ...(state.exoticInfo || {}) };
+  info[inp.dataset.exotic] = { ...info[inp.dataset.exotic], [inp.dataset.field]: Math.max(0, num(inp.value)) };
+  state.exoticInfo = info;
+  save();
+  renderExoticTable();
+});
+
+$('#exoticField').addEventListener('change', e => {
+  state.exoticField = num(e.target.value);
+  save();
+  renderExoticTable();
+});
+
+$('#exoticEdit').addEventListener('click', () => { exoticEditing = !exoticEditing; renderExoticTable(); });
+
+$('#exoticReset').addEventListener('click', async () => {
+  if (!await confirmModal('Reset exotic wager numbers?', 'Restores the ballpark min bets and average payouts.', 'Reset')) return;
+  state.exoticInfo = {};
+  save();
+  renderExoticTable();
 });
 
 /* =========================================================

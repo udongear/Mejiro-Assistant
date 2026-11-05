@@ -124,6 +124,7 @@
             <a href="#" class="exotic-tile" aria-disabled="true"><b>Exacta</b><span>1st and 2nd, in order</span></a>
             <a href="#" class="exotic-tile" aria-disabled="true"><b>Trifecta</b><span>1st, 2nd and 3rd, in order</span></a>
             <a href="#" class="exotic-tile" aria-disabled="true"><b>Superfecta</b><span>1st through 4th, in order</span></a>
+            <a href="#" class="exotic-tile" aria-disabled="true"><b>Super High Five</b><span>1st through 5th, in order</span></a>
             <a href="#" class="exotic-tile" aria-disabled="true"><b>Pick 3</b><span>Winners of 3 races in a row</span></a>
             <a href="#" class="exotic-tile" aria-disabled="true"><b>Pick 5</b><span>Winners of 5 races in a row</span></a>
           </div>
@@ -164,6 +165,34 @@
           </div>
           <p class="muted small-text">A tier applies once your bankroll reaches its portfolio size. Below the smallest tier, the smallest tier's risk % is used.</p>
           <div class="table-wrap"><table class="table" id="matrixTable"></table></div>
+        </div>
+        <div class="card">
+          <div class="card-head">
+            <h3>Exotic wagers at a glance</h3>
+            <div class="btn-row">
+              <button class="btn tiny-btn" id="exoticEdit" type="button">Edit numbers</button>
+              <button class="btn tiny-btn ghost" id="exoticReset" type="button">Reset</button>
+            </div>
+          </div>
+          <p class="callout"><b>Approximations, not real data.</b> The min bets and average payouts below are rough estimates, not figures from any track or TwinSpires. Min bets vary by track, and payouts swing widely from race to race. Use <b>Edit numbers</b> to replace them with what you actually see.</p>
+          <div class="kind-legend">
+            <div class="kind-item vertical"><span class="kind-tag vertical">Vertical</span>
+              <p>Every pick is in <b>one race</b>: you're calling the order horses finish in. Exacta, Trifecta, Superfecta and Super High Five.</p></div>
+            <div class="kind-item horizontal"><span class="kind-tag horizontal">Horizontal</span>
+              <p>The ticket <b>carries across several races in a row</b>, and you need the winner of each one. Pick 3 and Pick 5.</p></div>
+          </div>
+          <div class="exotic-notes">
+            <p class="muted small-text">Click a column to sort. Hover over (or tap) a bet's name to see how it works.
+              <b>Possible outcomes</b> is plain math: every result a ticket could need with this many horses in each race.
+              <b>Break-even</b> is how often a min-bet ticket has to hit to pay for itself at the average payout (1 in ROI).</p>
+            <label class="inline-field">Horses per race
+              <select id="exoticField">
+                <option>5</option><option>6</option><option>7</option><option>8</option><option>9</option><option>10</option>
+                <option>11</option><option>12</option><option>13</option><option>14</option>
+              </select>
+            </label>
+          </div>
+          <div class="table-wrap"><table class="table exotic-table" id="exoticTable"></table></div>
         </div>
       </section>
 

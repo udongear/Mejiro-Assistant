@@ -256,6 +256,62 @@ input[type="date"] { color-scheme: dark; }
   .strategy-side { width: 100%; justify-content: flex-end; }
 }
 
+/* Risk Matrix: exotic wagers at a glance */
+.sort-btn {
+  display: inline-flex; align-items: center; gap: 5px; padding: 0; border: 0; background: none;
+  color: inherit; font: inherit; cursor: pointer;
+}
+.sort-btn:hover, .sort-btn.active { color: var(--lavender); }
+.sort-arrow { font-size: 10px; opacity: .6; }
+.sort-btn.active .sort-arrow { opacity: 1; }
+.exotic-table th.num .sort-btn { flex-direction: row-reverse; }
+.callout {
+  margin: 4px 0 10px; padding: 10px 12px; border-radius: 10px; font-size: 13px; line-height: 1.5;
+  background: rgba(255, 216, 77, .08); border: 1px solid rgba(255, 216, 77, .35); color: var(--text);
+}
+.callout b:first-child { color: #FFD84D; }
+/* Vertical bets (one race) in cyan, horizontal bets (several races) in pink */
+.kind-tag {
+  display: inline-block; padding: 2px 7px; border-radius: 999px; font: 600 10px/1.4 var(--font);
+  letter-spacing: .04em; text-transform: uppercase; vertical-align: middle;
+}
+.kind-tag.vertical { color: #4FD1E5; background: rgba(79, 209, 229, .12); border: 1px solid rgba(79, 209, 229, .4); }
+.kind-tag.horizontal { color: #FFB3E6; background: rgba(255, 179, 230, .12); border: 1px solid rgba(255, 179, 230, .4); }
+.tooltip .kind-tag { margin-left: 4px; }
+.bet-cell { border-left: 3px solid transparent; }
+.bet-cell.vertical { border-left-color: #4FD1E5; }
+.bet-cell.horizontal { border-left-color: #FFB3E6; }
+.bet-cell.vertical .bet-name b { color: #4FD1E5; }
+.bet-cell.horizontal .bet-name b { color: #FFB3E6; }
+.bet-cell .kind-tag { margin-left: 8px; }
+.exotic-notes { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 6px; }
+.exotic-notes p { margin: 0; max-width: 820px; }
+.exotic-notes p b { color: var(--text); font-weight: 600; }
+.inline-field { flex-shrink: 0; }
+.inline-field select { width: 90px; padding: 6px 8px; }
+@media (max-width: 640px) { .exotic-notes { flex-direction: column; align-items: stretch; } }
+.kind-legend { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 0 0 10px; }
+.kind-item { padding: 10px 12px; border-radius: 10px; background: var(--surface-2); border-left: 3px solid; font-size: 13px; line-height: 1.5; }
+.kind-item.vertical { border-left-color: #4FD1E5; }
+.kind-item.horizontal { border-left-color: #FFB3E6; }
+.kind-item p { margin: 6px 0 0; color: var(--muted); }
+.kind-item p b { color: var(--text); }
+@media (max-width: 640px) { .kind-legend { grid-template-columns: 1fr; } }
+.bet-name { display: inline-flex; align-items: center; gap: 6px; cursor: help; border-radius: 6px; }
+.bet-name:focus-visible { outline: 2px solid var(--violet); outline-offset: 2px; }
+.info-dot {
+  display: inline-grid; place-items: center; width: 15px; height: 15px; border-radius: 50%;
+  border: 1px solid var(--muted); color: var(--muted); font: italic 600 10px/1 Georgia, serif;
+}
+.bet-name:hover .info-dot, .bet-name:focus .info-dot { border-color: var(--lavender); color: var(--lavender); }
+.stars { color: #FFD84D; letter-spacing: 2px; font-size: 15px; }
+.stars .off { color: var(--border); }
+.roi-cell { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+.roi-cell b { min-width: 64px; }
+.roi-track { width: 140px; height: 8px; border-radius: 4px; background: var(--surface-2); overflow: hidden; }
+.roi-track span { display: block; height: 100%; border-radius: 4px; background: linear-gradient(90deg, var(--violet), var(--lavender)); }
+@media (max-width: 640px) { .roi-track { width: 70px; } }
+
 /* Today's Races: Exotic Wagering (placeholders until the calculators exist) */
 .exotic-card { margin-top: 16px; }
 .exotic-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
@@ -315,6 +371,8 @@ input[type="date"] { color-scheme: dark; }
   padding: 8px 10px; font-size: 12px; box-shadow: 0 8px 24px rgba(0, 0, 0, .5);
 }
 .tooltip b { display: block; font-size: 13px; }
+.tooltip { max-width: 300px; line-height: 1.45; }
+.tooltip b { margin-bottom: 2px; }
 
 /* ---------- Modal & toast ---------- */
 .modal { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 16px; background: rgba(0, 0, 0, .7); }
