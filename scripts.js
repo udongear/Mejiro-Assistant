@@ -666,9 +666,11 @@ function renderRaces() {
   }).join('');
 
   $('#exoticCard').classList.toggle('hidden', !tracks.length);
-  // Easiest to hardest, by the same difficulty stars as the Risk Matrix's exotic wager table
+  // Easiest to hardest, by the same difficulty stars as the Risk Matrix's exotic wager table,
+  // colored the same way: vertical (one race) in cyan, horizontal (several races) in pink
   $('#exoticTiles').innerHTML = [...EXOTIC_INFO].sort((a, b) => a.stars - b.stars).map(d => `
-    <a href="#" class="exotic-tile" aria-disabled="true"><b>${esc(d.name)}</b>${starsHTML(d.stars)}<span class="tile-desc">${esc(d.short)}</span></a>`).join('');
+    <a href="#" class="exotic-tile ${d.kind}" aria-disabled="true"><b>${esc(d.name)}</b>${starsHTML(d.stars)}<span class="tile-desc">${esc(d.short)}</span>
+      <span class="kind-tag ${d.kind}">${d.kind === 'vertical' ? 'Single Race' : 'Multiple Races'}</span></a>`).join('');
 
   const track = tracks.find(x => x.key === racesView.key);
   if (!track) {

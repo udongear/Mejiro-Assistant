@@ -322,6 +322,11 @@ input[type="date"] { color-scheme: dark; }
 .exotic-tile b { color: var(--lavender); font-size: 15px; }
 .exotic-tile .tile-desc { color: var(--muted); font-size: 12px; }
 .exotic-tile .stars { font-size: 13px; letter-spacing: 1px; }
+.exotic-tile.vertical { border-left: 3px solid #4FD1E5; }
+.exotic-tile.horizontal { border-left: 3px solid #FFB3E6; }
+.exotic-tile.vertical b { color: #4FD1E5; }
+.exotic-tile.horizontal b { color: #FFB3E6; }
+.exotic-tile .kind-tag { align-self: flex-start; margin-top: 6px; }
 
 /* Tracker: log bets */
 .bet-shared { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
