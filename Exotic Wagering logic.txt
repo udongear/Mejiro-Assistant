@@ -1,0 +1,102 @@
+The plan has two parts. First, turn each horse's career stats into probabilities for this specific race. Then chain those probabilities together for each bet type. I'll use your Belmont Race 6 as the example throughout.
+
+## Step 1: Adjust for small samples
+
+Career win % is noisy when a horse has few starts. Amberjack's 28.6% comes from only 7 starts, while Two Eagles River's 21.9% comes from 32, so the second number is much more reliable.
+
+The fix is to blend each horse's record with an "average horse." A typical field has about 8 horses, so an average horse wins about 12.5%, finishes top‑2 about 25%, and top‑3 about 37.5%.
+
+**Adjusted rate = (horse's count + K × average rate) / (starts + K)**
+
+I use **K = 10**, which works like adding 10 average starts to every record. That pulls short records toward average and barely moves long ones.
+
+- Amberjack: (2 + 10 × 0.125) / (7 + 10) = **19.1%** (down from 28.6%)
+- Two Eagles River: (7 + 1.25) / (32 + 10) = **19.6%** (down from 21.9%)
+
+Apply the same formula to place and show, using 0.25 and 0.375 as the average rates.
+
+## Step 2: Make win chances add up to 100% for this race
+
+Your raw win % values add up to **141%** for this race. Even after adjusting, they add up to 113%. Exactly one horse wins, so divide each adjusted rate by the total:
+
+**Race win % = adjusted win / sum of all adjusted wins**
+
+## Step 3: Use place and show data to measure finishing positions
+
+This is where your Place and Show columns become valuable. They show which horses tend to run 2nd or 3rd even when they don't win.
+
+- **2nd‑place strength** = adjusted Place % − adjusted Win % (how often the horse finishes exactly 2nd)
+- **3rd‑place strength** = adjusted Show % − adjusted Place % (how often it finishes exactly 3rd)
+
+| PP | Horse | Adjusted win | **Race win %** | 2nd strength | 3rd strength |
+|---|---|---|---|---|---|
+| 1 | Amberjack | 19.1% | 16.9% | 19.1 | 13.2 |
+| 2 | Two Eagles River | 19.6% | 17.4% | 24.4 | 10.1 |
+| 3 | Eliminate | 17.9% | 15.8% | 9.3 | **20.7** |
+| 4 | General Partner | 20.2% | 17.9% | 10.7 | 10.7 |
+| 5 | Lunar Module | 14.2% | **12.6%** | **25.6** | 16.5 |
+| 6 | Awesome Native | 21.9% | **19.4%** | 17.7 | 9.4 |
+
+Lunar Module rarely wins but is the strongest horse for 2nd. Eliminate stands out for 3rd.
+
+## Step 4: Exacta, trifecta and superfecta
+
+Fill the positions one at a time. At each position, use that position's strength column, and leave out horses already placed:
+
+**P(A‑B‑C‑D) = winA × [2ndB ÷ Σ 2nd, excluding A] × [3rdC ÷ Σ 3rd, excluding A and B] × [4thD ÷ Σ 4th, excluding A, B and C]**
+
+- **Exacta:** use the first two factors.
+- **Trifecta:** use the first three factors.
+- **Superfecta:** use all four. You don't have 4th‑place data, so for 4th I use the adjusted Show % (top‑3 rate) as a general consistency measure.
+
+**Worked exacta, 6‑5 (Awesome Native over Lunar Module):**
+0.194 × [25.6 ÷ (106.8 − 17.7)] = 0.194 × 0.287 = **5.6%**
+
+The standard Harville formula, which uses only win %, gives just 3.0% for this combination. It doesn't know Lunar Module is a place‑type horse.
+
+As a sanity check, the model gives Lunar Module a 37% chance of finishing top‑2. His adjusted place rate, scaled to this race, is 36%, so the model is consistent with his data.
+
+The most likely combinations, with **fair price = $1 ÷ probability**:
+
+| Bet | Most likely | Chance | Fair $1 payout |
+|---|---|---|---|
+| Exacta | 6‑5 | 5.6% | ~$18 |
+| Trifecta | 6‑5‑3 | 2.1% | ~$48 |
+| Superfecta | 6‑5‑3‑2 | 0.77% | ~$129 |
+
+**Ticket structure:** a 1‑2‑3‑4‑6 over 5 exacta (Lunar Module 2nd, any of the others 1st) costs 5 combinations and hits **24.8%** of the time. A box of the top three win horses (6‑4‑2) costs 6 combinations and hits only 21.5%. A ticket built around what the model actually predicts beats a box.
+
+## Step 5: Pick 3 and Pick 5
+
+These bets only need each race's **Race win %** from Step 2. The races are treated as independent:
+
+**P(hit) = (sum of race win % for your horses in leg 1) × (leg 2) × … × (last leg)**
+
+- **Leg 1 (Race 6):** using horses 6 and 4 gives 19.4% + 17.9% = 37.3%.
+- **Legs 2 and 3 (hypothetical):** say your two horses cover 40% in Race 7 and 45% in Race 8.
+- **Result:** 0.373 × 0.40 × 0.45 = **6.7%**.
+
+That's a 2×2×2 ticket: 8 combinations at $0.50, so it costs $4. To break even, the winning combination needs to pay at least **$4 ÷ 0.067 ≈ $60**.
+
+A Pick 5 works the same way with five legs.
+
+## Step 6: Decide whether to bet
+
+For any combination: **bet it if the posted payout is higher than the fair price ($1 ÷ probability).**
+
+- Compare against TwinSpires' exacta probables for exactas, and the will‑pays for Pick N bets.
+- Trifectas and superfectas don't have posted payout estimates, so the app can only show the fair price for those.
+
+**Where your other two fields come in:**
+
+- **Track name:** look up the takeout, minimum bets, and which Pick sequences that track offers. These can be extra columns in your tracks table.
+- **Number of races:** sets the rolling Pick 3 sequences (Belmont's 8 races give six: races 1–3 through 6–8) and the Pick 5 legs. The Pick 5 legs are defined by each track.
+
+**Edge cases:**
+
+- **Scratch:** remove the horse and re‑divide the remaining win chances so they add to 100%. In a Pick N, a scratched horse is usually swapped for the post‑time favorite.
+- **Coupled entries (1/1A):** add the two horses' probabilities together.
+
+**Limitation:** career stats separate this field only a little. The top horse is 19.4%, compared with 16.7% if all six were equal. So the model's edges will be small until it has more information. Morning‑line odds, recent form (last 3–5 races) and surface/distance records are all worth adding.
+
+If your scraper can also grab the morning‑line odds from that TwinSpires page, I'd blend them in at Step 2. That's the single biggest accuracy improvement.

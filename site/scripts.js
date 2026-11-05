@@ -667,10 +667,12 @@ function renderRaces() {
 
   $('#exoticCard').classList.toggle('hidden', !tracks.length);
   // Easiest to hardest, by the same difficulty stars as the Risk Matrix's exotic wager table,
-  // colored the same way: vertical (one race) in cyan, horizontal (several races) in pink
+  // colored the same way: vertical (one race) in cyan, horizontal (several races) in pink. Each opens its calculator.
   $('#exoticTiles').innerHTML = [...EXOTIC_INFO].sort((a, b) => a.stars - b.stars).map(d => `
-    <a href="#" class="exotic-tile ${d.kind}" aria-disabled="true"><b>${esc(d.name)}</b>${starsHTML(d.stars)}<span class="tile-desc">${esc(d.short)}</span>
-      <span class="kind-tag ${d.kind}">${d.kind === 'vertical' ? 'Single Race' : 'Multiple Races'}</span></a>`).join('');
+    <button type="button" class="exotic-tile ${d.kind}" data-calc="${esc(d.name)}" title="Calculate the most likely ${esc(d.name)} combinations">
+      <span class="tile-play" aria-hidden="true">${PLAY_SVG}</span>
+      <b>${esc(d.name)}</b>${starsHTML(d.stars)}<span class="tile-desc">${esc(d.short)}</span>
+      <span class="kind-tag ${d.kind}">${d.kind === 'vertical' ? 'Single Race' : 'Multiple Races'}</span></button>`).join('');
 
   const track = tracks.find(x => x.key === racesView.key);
   if (!track) {
@@ -745,12 +747,225 @@ $('#racesTracks').addEventListener('click', async e => {
   renderRaces();
 });
 
-// Exotic Wagering tiles are placeholders until their calculators are worked out
 $('#exoticCard').addEventListener('click', e => {
-  if (!e.target.closest('.exotic-tile')) return;
-  e.preventDefault();
-  toast('Coming soon');
+  const tile = e.target.closest('[data-calc]');
+  if (tile) openCalculator(tile.dataset.calc);
 });
+
+/* =========================================================
+   Exotic calculator — each Exotic Wagering tile opens it. It turns every runner's career record
+   into chances for this race, then chains them into the bet's 10 most likely combinations.
+   1. Shrink each record toward an average horse (1 in 8 to finish 1st, 2nd or 3rd) by adding
+      K = 10 average starts: short records move a lot, long ones barely.
+   2. Win chances = adjusted win rates, scaled so the field adds up to 100%.
+   3. Later positions use their own strength: 2nd = adjusted rate of finishing exactly 2nd,
+      3rd = exactly 3rd, 4th and 5th = adjusted top-3 rate (there's no 4th/5th data). A horse's
+      chance at a position = its strength ÷ the strengths of the runners not yet placed.
+   4. Pick 3 / Pick 5: one winner per race, races independent, so the legs' win chances multiply.
+   Runners with fewer than 3 starts (or no record) still count against everyone, but are never
+   suggested; a race where they're over a third of the field is skipped. Scratches are removed.
+   1 and 1A are one betting interest.
+   ========================================================= */
+
+const CALC = { K: 10, minStarts: 3, maxUnknownShare: 1 / 3, results: 10 };
+const PLAY_SVG = '<svg viewBox="0 0 24 24" width="22" height="22"><circle cx="12" cy="12" r="11" fill="currentColor"/><path d="M10 7.5v9l7-4.5z" fill="#0D0A14"/></svg>';
+
+// Standard saddle-cloth colors by program number: [background, number]
+const CLOTHS = {
+  1: ['#D7262E', '#FFFFFF'], 2: ['#FFFFFF', '#111111'], 3: ['#1E5BC6', '#FFFFFF'], 4: ['#F5D90A', '#111111'],
+  5: ['#0F8A3C', '#FFFFFF'], 6: ['#111111', '#F5D90A'], 7: ['#F58220', '#111111'], 8: ['#F7A8C4', '#111111'],
+  9: ['#3CC8C8', '#111111'], 10: ['#6A2C91', '#FFFFFF'], 11: ['#9AA0A6', '#D7262E'], 12: ['#A6D84A', '#111111'],
+  13: ['#7A4A2A', '#FFFFFF'], 14: ['#7A1F2B', '#F5D90A'], 15: ['#C3B091', '#111111'], 16: ['#8EC9EE', '#D7262E'],
+  17: ['#1F2A5A', '#FFFFFF'], 18: ['#1F4D2E', '#F5D90A'],
+};
+const cloth = num => {
+  const [bg, fg] = CLOTHS[parseInt(num, 10)] || ['#3A3350', '#FFFFFF'];
+  return `<span class="cloth" style="background:${bg};color:${fg}">${esc(num)}</span>`;
+};
+
+// One race's runners with their adjusted strengths, plus why the race can't be used ('' if it can).
+// `need` is how many qualified runners the bet needs in this race.
+function raceModel(race, need) {
+  const { K, minStarts, maxUnknownShare } = CALC;
+  const field = race.entrants.filter(e => !e.scratched).map(e => {
+    const n = e.starts ?? 0;
+    const rate = (count, prior) => ((count || 0) + K * prior) / (n + K);
+    const top3 = rate((e.wins || 0) + (e.places || 0) + (e.shows || 0), 3 / 8);
+    return {
+      pp: String(e.pp), horse: e.horse, starts: e.starts,
+      key: String(e.pp).replace(/[A-Z]+$/i, '') || String(e.pp),
+      ok: e.starts != null && e.starts >= minStarts,
+      // Strength at each finishing position: 1st, exactly 2nd, exactly 3rd, then top 3 for 4th and 5th
+      pos: [rate(e.wins, 1 / 8), rate(e.places, 1 / 8), rate(e.shows, 1 / 8), top3, top3],
+    };
+  });
+  const total = field.reduce((s, h) => s + h.pos[0], 0);
+  field.forEach(h => { h.win = h.pos[0] / total; });
+  const thin = field.filter(h => !h.ok);
+  const why = !field.length ? 'no runners'
+    : thin.length / field.length > maxUnknownShare ? `${thin.length} of ${field.length} runners have fewer than ${minStarts} starts`
+    : field.length - thin.length < need ? `fewer than ${need} runners with ${minStarts}+ starts` : '';
+  return { field, thin, why, scratched: race.entrants.length - field.length };
+}
+
+// Exacta to Super High Five: the most likely finishing orders, filling one position at a time
+function topVertical(model, legs) {
+  const { field } = model;
+  const picks = field.filter(h => h.ok);
+  // With a coupled entry (1 and 1A), orders that read the same on a ticket are added together
+  const coupled = new Set(field.map(h => h.key)).size < field.length;
+  const top = [], sums = new Map();
+  const floor = () => (coupled || top.length < CALC.results ? 0 : top[top.length - 1].p);
+  const add = (seq, p) => {
+    if (coupled) {
+      const k = seq.map(h => h.key).join('-'), prev = sums.get(k);
+      sums.set(k, { seq: prev ? prev.seq : seq, p: (prev ? prev.p : 0) + p });
+      return;
+    }
+    top.push({ seq, p });
+    top.sort((a, b) => b.p - a.p);
+    if (top.length > CALC.results) top.pop();
+  };
+  const placed = new Set();
+  const walk = (seq, p) => {
+    const at = seq.length;
+    if (at === legs) return add(seq, p);
+    let rest = 0;
+    field.forEach(h => { if (!placed.has(h)) rest += h.pos[at]; });
+    for (const h of picks) {
+      if (placed.has(h) || (coupled && seq.some(x => x.key === h.key))) continue;
+      const q = p * h.pos[at] / rest;
+      if (q <= floor()) continue;  // later positions only make it smaller
+      placed.add(h);
+      walk([...seq, h], q);
+      placed.delete(h);
+    }
+  };
+  walk([], 1);
+  const best = coupled ? [...sums.values()].sort((a, b) => b.p - a.p).slice(0, CALC.results) : top;
+  return best.map(({ seq, p }) => ({ p, legs: seq.map(h => ({ num: h.key, name: h.horse })) }));
+}
+
+// Pick 3 / Pick 5: one winner per race. Keeping the 10 best after each leg is exact,
+// since every combination shares the same choices for the legs still to come.
+function topHorizontal(models, raceNums) {
+  let combos = [{ p: 1, legs: [] }];
+  models.forEach((m, i) => {
+    const byKey = new Map();
+    m.field.forEach(h => {
+      const x = byKey.get(h.key) || { num: h.key, names: [], win: 0, ok: false, race: raceNums[i] };
+      x.names.push(h.horse);
+      x.win += h.win;
+      x.ok = x.ok || h.ok;
+      byKey.set(h.key, x);
+    });
+    const options = [...byKey.values()].filter(x => x.ok);
+    combos = combos.flatMap(c => options.map(o => ({ p: c.p * o.win, legs: [...c.legs, { num: o.num, name: o.names.join(' & '), race: o.race }] })))
+      .sort((a, b) => b.p - a.p).slice(0, CALC.results);
+  });
+  return combos;
+}
+
+const chanceText = p => { const v = p * 100; return (v >= 1 ? v.toFixed(1) : v >= 0.1 ? v.toFixed(2) : v.toFixed(3)) + '%'; };
+// Fair odds: what a winning ticket should pay, to 1, for the bet to break even
+const fairOdds = p => { const o = (1 - p) / p; return (o < 10 ? +o.toFixed(1) : Math.round(o)).toLocaleString() + '-1'; };
+
+let calcView = null;  // { bet, key, start }
+
+function openCalculator(name) {
+  const tracks = racesTracks(today());
+  if (!tracks.length) return toast("Scrape today's tracks first");
+  calcView = {
+    bet: EXOTIC_INFO.find(d => d.name === name),
+    key: tracks.some(t => t.key === racesView.key) ? racesView.key : tracks[0].key,
+    start: racesView.race,
+  };
+  openModal('<div id="calcBody"></div>', { wide: true });
+  drawCalculator();
+}
+
+// The races a bet can use at a track: single races, or runs of consecutive races for Pick bets
+function calcOptions(track, bet) {
+  const races = track.card.races;
+  const nums = Object.keys(races).map(Number).sort((a, b) => a - b);
+  if (bet.kind === 'vertical') {
+    return nums.map(n => { const m = raceModel(races[n], bet.legs); return { n, label: `Race ${n}`, why: m.why, models: [m], nums: [n] }; });
+  }
+  const last = nums[nums.length - 1];
+  return nums.filter(n => n + bet.legs - 1 <= last).map(n => {
+    const legNums = Array.from({ length: bet.legs }, (_, i) => n + i);
+    const label = `Races ${n}–${n + bet.legs - 1}`;
+    const missing = legNums.find(x => !races[x]);
+    if (missing) return { n, label, why: `race ${missing} wasn't scraped` };
+    const models = legNums.map(x => raceModel(races[x], 1));
+    const bad = models.findIndex(m => m.why);
+    return { n, label, why: bad < 0 ? '' : `race ${legNums[bad]}: ${models[bad].why}`, models, nums: legNums };
+  });
+}
+
+function drawCalculator() {
+  const { bet } = calcView;
+  const tracks = racesTracks(today());
+  const track = tracks.find(t => t.key === calcView.key) || tracks[0];
+  if (!track) return closeModal();
+  calcView.key = track.key;
+  const options = calcOptions(track, bet);
+  const usable = options.filter(o => !o.why);
+  const pick = usable.find(o => o.n === calcView.start) || usable[0];
+  if (pick) calcView.start = pick.n;
+  const horizontal = bet.kind === 'horizontal';
+
+  let body;
+  if (!pick) {
+    body = `<p class="xc-empty">No ${horizontal ? 'run of races' : 'race'} at ${esc(track.name)} has enough data for a ${esc(bet.name)}.
+      ${horizontal ? `It needs ${bet.legs} races in a row, all scraped, each with enough runners that have ${CALC.minStarts}+ starts.` : ''}</p>`;
+  } else {
+    const results = horizontal ? topHorizontal(pick.models, pick.nums) : topVertical(pick.models[0], bet.legs);
+    const thin = pick.models.flatMap((m, i) => m.thin.map(h => `${horizontal ? `R${pick.nums[i]} ` : ''}#${esc(h.pp)} ${esc(h.horse)}`));
+    const running = pick.models.map((m, i) => `${horizontal ? `Race ${pick.nums[i]}: ` : ''}${m.field.length} running${m.scratched ? `, ${m.scratched} scratched` : ''}`);
+    body = `
+      <p class="muted small-text xc-field">${running.join(' · ')}.
+        ${thin.length ? `Left out (fewer than ${CALC.minStarts} starts): ${thin.join(', ')}.` : 'Every runner has enough starts.'}</p>
+      <ol class="xc-results">${results.map((r, i) => `
+        <li class="xc-row">
+          <span class="xc-rank">${i + 1}</span>
+          <div class="xc-combo">
+            <div class="xc-cloths">${r.legs.map(l => horizontal
+              ? `<span class="xc-leg"><small>R${l.race}</small>${cloth(l.num)}</span>` : cloth(l.num)).join(`<span class="xc-sep">${horizontal ? '/' : '–'}</span>`)}</div>
+            <div class="xc-names">${r.legs.map(l => esc(l.name)).join(' › ')}</div>
+          </div>
+          <div class="xc-odds"><b>${chanceText(r.p)}</b><span title="Fair odds: a winning ticket needs to pay more than this to be worth it">${fairOdds(r.p)}</span></div>
+        </li>`).join('') || '<li class="xc-empty">Not enough qualified runners for this bet.</li>'}</ol>
+      <p class="muted tiny xc-note">Chance of the combination hitting, and its <b>fair odds</b>: the ticket is only worth playing when TwinSpires' payout beats them.</p>`;
+  }
+
+  $('#calcBody').innerHTML = `
+    <div class="xc-head">
+      <h3>${esc(bet.name)} <span class="kind-tag ${bet.kind}">${horizontal ? 'Multiple Races' : 'Single Race'}</span></h3>
+      ${starsHTML(bet.stars)}
+    </div>
+    <div class="xc-controls">
+      <label>Track<select id="calcTrack">${tracks.map(t => `<option value="${esc(t.key)}" ${t.key === track.key ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</select></label>
+      <label>${horizontal ? 'Races' : 'Race'}<select id="calcRace">${options.map(o =>
+        `<option value="${o.n}" ${pick && o.n === pick.n ? 'selected' : ''} ${o.why ? 'disabled' : ''}>${o.label}${o.why ? ` (${esc(o.why)})` : ''}</option>`).join('')}</select></label>
+    </div>
+    ${body}
+    <details class="xc-how">
+      <summary>How it's calculated</summary>
+      <ol>
+        <li>Each runner's record is blended with an average horse's, as if it had 10 more ordinary starts, so a hot 2-for-4 doesn't outrank a steady 8-for-40.</li>
+        <li>Win chances are scaled so the field adds up to 100%.</li>
+        <li>2nd and 3rd use how often each horse finishes exactly 2nd or 3rd; 4th and 5th use its top-3 rate. Horses already placed are taken out at each step.</li>
+        <li>Pick 3 and Pick 5 multiply each race's win chances together.</li>
+      </ol>
+      <p>Runners with fewer than ${CALC.minStarts} starts still count against everyone's chances, but are never suggested. Races where they're more than a third of the field are skipped. Career records are all it uses: morning-line odds, recent form and surface or distance records would sharpen it.</p>
+    </details>
+    <div class="modal-actions"><button class="btn ghost" id="calcClose" type="button">Close</button></div>`;
+
+  $('#calcTrack').onchange = e => { calcView.key = e.target.value; drawCalculator(); };
+  $('#calcRace').onchange = e => { calcView.start = +e.target.value; drawCalculator(); };
+  $('#calcClose').onclick = closeModal;
+}
 
 $('#racesCalc').addEventListener('click', e => {
   const b = e.target.closest('[data-wps]');
