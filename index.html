@@ -147,24 +147,16 @@
       <section id="tab-matrix" class="tab">
         <header class="tab-head">
           <h2>Risk Matrix</h2>
-          <div class="head-actions">
-            <button class="btn ghost" id="matrixReset">Reset to defaults</button>
-          </div>
         </header>
         <div class="card">
           <div class="card-head">
             <h3>Portfolio size → Risk %</h3>
-            <span class="muted small-text" id="matrixCurrent"></span>
+            <div class="card-head-right">
+              <span class="muted small-text" id="matrixCurrent"></span>
+              <button class="btn tiny-btn" id="editTiers" type="button">Edit tiers</button>
+            </div>
           </div>
           <div id="matrixChart" class="chart"></div>
-        </div>
-        <div class="card">
-          <div class="card-head">
-            <h3>Edit tiers</h3>
-            <button class="btn" id="matrixAdd">+ Add tier</button>
-          </div>
-          <p class="muted small-text">A tier applies once your bankroll reaches its portfolio size. Below the smallest tier, the smallest tier's risk % is used.</p>
-          <div class="table-wrap"><table class="table" id="matrixTable"></table></div>
         </div>
         <div class="card">
           <div class="card-head">

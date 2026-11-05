@@ -204,10 +204,11 @@ function toast(msg) {
   toastTimer = setTimeout(() => el.classList.add('hidden'), 2800);
 }
 
-function openModal(html, { bare = false } = {}) {
+function openModal(html, { bare = false, wide = false } = {}) {
   $('#modalBody').onclick = null;
   $('#modalBody').innerHTML = html;
   $('.modal-card').classList.toggle('bare', bare);
+  $('.modal-card').classList.toggle('wide', wide);
   $('#modal').classList.remove('hidden');
   const first = $('#modalBody input, #modalBody select');
   if (first) first.focus();
@@ -1473,48 +1474,71 @@ function renderMatrix() {
       e.clientX, e.clientY));
     g.addEventListener('mouseleave', hideTip);
   });
-
-  $('#matrixTable').innerHTML = `
-    <thead><tr><th>Portfolio size ($)</th><th>Risk %</th><th class="num">Stake at tier start</th><th></th></tr></thead>
-    <tbody>${tiers.map((t, i) => `
-      <tr class="${cur && t === cur ? 'current' : ''}">
-        <td><input type="number" min="0" step="any" value="${t.size}" data-i="${i}" data-field="size"></td>
-        <td><input type="number" min="0" max="100" step="any" value="${t.pct}" data-i="${i}" data-field="pct"></td>
-        <td class="num">${money(t.size * t.pct / 100)}</td>
-        <td><div class="row-actions"><button class="btn tiny-btn ghost danger" data-remove="${i}" title="Remove">✕</button></div></td>
-      </tr>`).join('')}</tbody>`;
 }
 
-$('#matrixTable').addEventListener('change', e => {
-  const inp = e.target.closest('input[data-i]');
-  if (!inp) return;
-  const tiers = sortedMatrix();
-  tiers[+inp.dataset.i][inp.dataset.field] = num(inp.value);
-  state.matrix = tiers;
-  save(); renderMatrix(); renderTracker();
-});
+// Tiers are edited in a popup; nothing changes until Save (closing it any other way discards the edits)
+function openTierEditor() {
+  const cur = currentTier();
+  let draft = sortedMatrix().map(t => ({ ...t, current: t === cur }));
+  openModal(`
+    <h3>Edit tiers</h3>
+    <p class="small-text">A tier applies once your bankroll reaches its portfolio size. Below the smallest tier, the smallest tier's risk % is used.
+      Your current tier is highlighted.</p>
+    <div class="table-wrap"><table class="table tier-table">
+      <thead><tr><th>Portfolio size ($)</th><th>Risk %</th><th class="num">Stake at tier start</th><th></th></tr></thead>
+      <tbody id="tierRows"></tbody>
+    </table></div>
+    <div class="tier-tools">
+      <button class="btn" id="tierAdd" type="button">+ Add tier</button>
+      <button class="btn ghost" id="tierDefaults" type="button">Reset to defaults</button>
+    </div>
+    <div class="modal-actions">
+      <button class="btn ghost" id="tierCancel" type="button">Cancel</button>
+      <button class="btn primary" id="tierSave" type="button">Save</button>
+    </div>`, { wide: true });
 
-$('#matrixTable').addEventListener('click', e => {
-  const btn = e.target.closest('[data-remove]');
-  if (!btn) return;
-  const tiers = sortedMatrix();
-  tiers.splice(+btn.dataset.remove, 1);
-  state.matrix = tiers;
-  save(); renderMatrix(); renderTracker();
-});
+  const body = $('#tierRows');
+  const draw = () => {
+    body.innerHTML = draft.map((t, i) => `
+      <tr class="${t.current ? 'current' : ''}">
+        <td><input type="number" min="0" step="any" value="${t.size}" data-i="${i}" data-field="size" aria-label="Portfolio size"></td>
+        <td><input type="number" min="0" max="100" step="any" value="${t.pct}" data-i="${i}" data-field="pct" aria-label="Risk percent"></td>
+        <td class="num" data-stake="${i}">${money(t.size * t.pct / 100)}</td>
+        <td><button class="btn tiny-btn ghost danger" type="button" data-remove="${i}" title="Remove tier">✕</button></td>
+      </tr>`).join('') || '<tr><td colspan="4" class="empty">No tiers. Add one below.</td></tr>';
+  };
+  draw();
+  // Typing updates the stake as you go; rows re-sort by size when you save
+  body.oninput = e => {
+    const inp = e.target.closest('input[data-i]');
+    if (!inp) return;
+    const t = draft[+inp.dataset.i];
+    t[inp.dataset.field] = num(inp.value);
+    $(`[data-stake="${inp.dataset.i}"]`).textContent = money(t.size * t.pct / 100);
+  };
+  body.onclick = e => {
+    const b = e.target.closest('[data-remove]');
+    if (!b) return;
+    draft.splice(+b.dataset.remove, 1);
+    draw();
+  };
+  $('#tierAdd').onclick = () => {
+    const last = [...draft].sort((a, b) => a.size - b.size).pop();
+    draft.push({ size: last ? last.size * 2 : 2, pct: last ? last.pct : 100 });
+    draw();
+    $$('#tierRows input[data-field="size"]').pop().focus();
+  };
+  $('#tierDefaults').onclick = () => { draft = DEFAULT_MATRIX.map(t => ({ ...t })); draw(); };
+  $('#tierCancel').onclick = closeModal;
+  $('#tierSave').onclick = () => {
+    state.matrix = draft.map(({ size, pct }) => ({ size, pct })).sort((a, b) => a.size - b.size);
+    save(); renderMatrix(); renderTracker();
+    closeModal();
+    toast('Tiers saved');
+  };
+}
 
-$('#matrixAdd').addEventListener('click', () => {
-  const tiers = sortedMatrix();
-  const last = tiers[tiers.length - 1];
-  state.matrix.push({ size: last ? last.size * 2 : 2, pct: last ? last.pct : 100 });
-  save(); renderMatrix();
-});
-
-$('#matrixReset').addEventListener('click', async () => {
-  if (!await confirmModal('Reset risk matrix?', 'Restores the original 12 tiers.', 'Reset')) return;
-  state.matrix = DEFAULT_MATRIX.map(t => ({ ...t }));
-  save(); renderMatrix(); renderTracker();
-});
+$('#editTiers').addEventListener('click', openTierEditor);
 
 /* ----- Exotic wagers at a glance: a sortable reference table. Difficulty is a fixed 1–6 ranking
    (no two bets share one); min bet and average payout start as ballpark defaults you can edit.

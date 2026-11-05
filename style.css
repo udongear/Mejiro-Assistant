@@ -378,6 +378,11 @@ input[type="date"] { color-scheme: dark; }
 .modal { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 16px; background: rgba(0, 0, 0, .7); }
 .modal-card { width: 100%; max-width: 460px; max-height: 90vh; overflow: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 22px; }
 .modal-card.bare { background: none; border: 0; padding: 0; }
+.modal-card.wide { max-width: 640px; }
+.card-head-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.tier-table input { width: 130px; padding: 7px 9px; }
+.tier-table td { padding: 6px 8px; }
+.tier-tools { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
 .modal-card h3 { font-size: 18px; color: var(--lavender); }
 .modal-card p { color: var(--muted); }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; flex-wrap: wrap; }
