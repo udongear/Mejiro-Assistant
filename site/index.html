@@ -42,6 +42,11 @@
         <div class="brand-mark">M</div>
         <span class="brand-name small">Mejiro</span>
       </div>
+      <!-- Switches every tab between straight bets and exotic wagers (see "Basic / Exotic mode" in scripts.js) -->
+      <div class="mode-toggle" id="modeToggle" role="group" aria-label="Wagering mode">
+        <button type="button" data-mode="basic" title="Win, Place and Show">Basic</button>
+        <button type="button" data-mode="exotic" title="Exactas, Trifectas, Pick 3s and more">Exotic</button>
+      </div>
       <nav class="nav" id="nav">
         <button data-tab="tracker" class="active">Tracker</button>
         <button data-tab="races">Today's Races</button>
@@ -114,12 +119,13 @@
             <div id="racesCalc"></div>
           </div>
         </div>
-        <!-- Shown once today's tracks are scraped. Placeholders: each will become a calculator built on the scraped records. -->
-        <div class="card exotic-card hidden" id="exoticCard">
+        <!-- Exotic mode, once today's tracks are scraped: each tile shows the day's top 10 tickets for its wager -->
+        <div class="card exotic-card only-exotic hidden" id="exoticCard">
           <div class="card-head">
             <h3>Exotic Wagering</h3>
           </div>
           <div class="exotic-grid" id="exoticTiles"></div>
+          <div id="exoticResults"></div>
         </div>
       </section>
 
@@ -128,10 +134,14 @@
         <header class="tab-head">
           <h2>Strategies</h2>
           <div class="head-actions">
-            <button class="btn ghost" id="editCategories" type="button">Edit categories</button>
+            <button class="btn ghost only-exotic" id="editCategories" type="button">Edit categories</button>
             <button class="btn primary" id="addStrategy" type="button">+ Add strategy</button>
           </div>
         </header>
+        <p class="intro only-basic">Your playbook for <b>Win, Place and Show</b> bets: how you pick a horse, which numbers you trust, when to sit a race out.
+          Keep each note short so you can check it at the track. Exotic strategies live in Exotic mode.</p>
+        <p class="intro only-exotic">Your playbook for <b>exotic wagers</b>: how you build Exacta, Trifecta, Superfecta, Super High Five and Pick tickets, such as who to key, when to box, and which races to spread in.
+          Use <b>Edit categories</b> to group notes by wager or approach. Win / Place / Show notes live in Basic mode.</p>
         <div id="strategyGroups"></div>
       </section>
 
@@ -140,7 +150,10 @@
         <header class="tab-head">
           <h2>Risk Matrix</h2>
         </header>
-        <div class="card">
+        <p class="intro only-basic">The Risk Matrix decides <b>how much of your bankroll to stake on each bet</b>. Each tier starts at a bankroll size and sets a risk %,
+          and your suggested stake on the Tracker is your balance × that %. A small bankroll bets a big share so it can grow; as it grows the % drops,
+          so one bad day can't wipe out what you've built. Use <b>Edit tiers</b> to make it more or less aggressive.</p>
+        <div class="card only-basic">
           <div class="card-head">
             <h3>Portfolio size → Risk %</h3>
             <div class="card-head-right">
@@ -150,7 +163,7 @@
           </div>
           <div id="matrixChart" class="chart"></div>
         </div>
-        <div class="card">
+        <div class="card only-exotic">
           <div class="card-head">
             <h3>Exotic wagers at a glance</h3>
             <div class="btn-row">

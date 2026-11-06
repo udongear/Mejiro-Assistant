@@ -26,8 +26,9 @@ let state = freshState();
 function freshState() {
   return {
     user: null,
+    mode: 'basic',  // 'basic' (Win / Place / Show) or 'exotic'; see "Basic / Exotic mode"
     bets: [],
-    strategies: [],  // { id, text, category }, in display order; category is a strategyCategories id or ''
+    strategies: [],  // { id, text, mode, category }, in display order; category is a strategyCategories id or ''
     strategyCategories: [],  // { id, name }, in display order
     exoticInfo: {},  // your edits to the Risk Matrix's exotic wager table: { "Exacta": { min, payout } }
     matrix: DEFAULT_MATRIX.map(t => ({ ...t })),
@@ -52,7 +53,7 @@ function readLocalState() {
    users/{uid}/racecards/{date}    that day's races captured from TwinSpires (state.cards holds one day)
    save() is called after every change; it writes only what differs from the last sync. */
 
-const PREF_KEYS = ['settings', 'matrix', 'wrRange', 'strategies', 'strategyCategories', 'wpsShown', 'exoticInfo', 'exoticField'];
+const PREF_KEYS = ['mode', 'settings', 'matrix', 'wrRange', 'hrBet', 'strategies', 'strategyCategories', 'wpsShown', 'exoticInfo', 'exoticField'];
 
 let fb = null;  // { auth, db } once Firebase is set up
 let synced = { prefs: '', bets: new Map(), cards: '' };  // last known Firestore copy (bet id → JSON)
@@ -345,9 +346,40 @@ $('#nav').addEventListener('click', e => {
   if (b) goTab(b.dataset.tab);
 });
 
+/* ---------- Basic / Exotic mode ----------
+   The toggle at the top of the sidebar switches every tab between straight bets (Win / Place / Show)
+   and exotic wagers. Bets, strategies and History follow the mode; the bankroll, balance and
+   Risk Matrix tiers are shared by both. */
+
+const isExotic = () => state.mode === 'exotic';
+const isExoticType = type => EXOTIC_INFO.some(d => d.name === type);
+const modeBets = () => state.bets.filter(b => isExoticType(b.type) === isExotic());
+const modeBetTypes = () => BET_TYPES.filter(([t]) => isExoticType(t) === isExotic());
+
+// Static parts of the page carry .only-basic or .only-exotic; the body's class hides the other mode's
+function applyMode() {
+  document.body.classList.toggle('mode-exotic', isExotic());
+  document.body.classList.toggle('mode-basic', !isExotic());
+  $$('#modeToggle [data-mode]').forEach(b => {
+    const on = b.dataset.mode === (isExotic() ? 'exotic' : 'basic');
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-pressed', on);
+  });
+}
+
+$('#modeToggle').addEventListener('click', e => {
+  const b = e.target.closest('[data-mode]');
+  if (!b || b.dataset.mode === (isExotic() ? 'exotic' : 'basic')) return;
+  state.mode = b.dataset.mode;
+  save();
+  renderAll();
+});
+
 function renderAll() {
+  applyMode();
   renderUser();
   renderTrackSelects();
+  syncBetTypes();
   renderTracker();
   renderRaces();
   renderStrategies();
@@ -373,16 +405,17 @@ function renderTrackSelects() {
   const scraped = state.cards && state.cards.date === today() ? Object.values(state.cards.tracks).map(t => t.name).sort() : [];
   $('#trackList').innerHTML = [...new Set([...scraped, ...betTracks])].map(n => `<option value="${esc(n)}"></option>`).join('');
 
-  // History filters by the tracks you've actually bet on
+  // History filters by the tracks you've bet on in this mode
+  const histTracks = [...new Set(modeBets().map(b => b.track))].sort();
   const hist = $('#histTrack'), hv = hist.value;
-  hist.innerHTML = '<option value="">All tracks</option>' + betTracks.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
-  hist.value = hv;
+  hist.innerHTML = '<option value="">All tracks</option>' + histTracks.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
+  hist.value = histTracks.includes(hv) ? hv : '';
 
-  // History's wager types: every type the Tracker offers, plus any older ones found in your bets
-  const types = [...new Set([...BET_TYPES.map(([t]) => t), ...state.bets.map(b => b.type).filter(Boolean)])];
+  // History's wager types: this mode's types, plus any older ones found in its bets
+  const types = [...new Set([...modeBetTypes().map(([t]) => t), ...modeBets().map(b => b.type).filter(Boolean)])];
   const ht = $('#histType'), tv = ht.value;
   ht.innerHTML = '<option value="">All types</option>' + types.map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('');
-  ht.value = tv;
+  ht.value = types.includes(tv) ? tv : '';
 }
 
 /* =========================================================
@@ -391,8 +424,10 @@ function renderTrackSelects() {
 
 const WR_RANGES = [['all', 'All-time'], ['90', '90 days'], ['30', '30 days'], ['7', '7 days'], ['1', 'Today']];
 
-// Win rate = won ÷ (won + lost), by bet date; scratches and pending bets don't count
+// Win rate (Basic) = won ÷ (won + lost) of Win / Place / Show bets, by bet date; scratches and pending bets don't count.
+// Exotic mode shows the hit rate per wager type instead.
 function renderWinRate() {
+  if (isExotic()) return renderHitRate();
   const range = WR_RANGES.some(([k]) => k === state.wrRange) ? state.wrRange : 'all';
   let from = '';
   if (range !== 'all') {
@@ -400,7 +435,7 @@ function renderWinRate() {
     d.setDate(d.getDate() - (num(range) - 1));
     from = localISO(d);
   }
-  const bets = state.bets.filter(b => !from || b.date >= from);
+  const bets = modeBets().filter(b => !from || b.date >= from);
   const count = s => bets.filter(b => b.status === s).length;
   const won = count('won'), lost = count('lost'), scratched = count('scratched');
   const rate = won + lost ? won / (won + lost) * 100 : null;
@@ -417,10 +452,40 @@ function renderWinRate() {
       : 'No settled bets in this period'}</div>`;
 }
 
+// Hit rate = hit ÷ (hit + missed) for one exotic wager type, all time. Each button shows its own rate,
+// with the best in green and the worst in red, so the types compare at a glance.
+function renderHitRate() {
+  const types = [...EXOTIC_INFO].sort((a, b) => a.stars - b.stars).map(d => d.name);
+  const stats = Object.fromEntries(types.map(t => {
+    const bets = state.bets.filter(b => b.type === t);
+    const count = s => bets.filter(b => b.status === s).length;
+    const won = count('won'), lost = count('lost');
+    return [t, { won, lost, scratched: count('scratched'), rate: won + lost ? won / (won + lost) * 100 : null }];
+  }));
+  const pick = types.includes(state.hrBet) ? state.hrBet : types[0];
+  const rates = types.map(t => stats[t].rate).filter(r => r != null);
+  const hi = Math.max(...rates), lo = Math.min(...rates);
+  const mark = r => r == null || rates.length < 2 || hi === lo ? '' : r === hi ? 'hi' : r === lo ? 'lo' : '';
+  const s = stats[pick];
+  $('#winRate').innerHTML = `
+    <div class="winrate-head">
+      <h3>Hit rate</h3>
+      <div class="seg-group">${types.map(t => `
+        <button type="button" class="seg hr-seg ${t === pick ? 'active' : ''}" data-hr="${esc(t)}">${esc(t)}
+          <small class="${mark(stats[t].rate)}">${stats[t].rate == null ? '—' : +stats[t].rate.toFixed(1) + '%'}</small></button>`).join('')}</div>
+    </div>
+    <div class="winrate-value">${s.rate == null ? '—' : +s.rate.toFixed(1) + '%'}</div>
+    <div class="winrate-bar"><span style="width:${s.rate || 0}%"></span></div>
+    <div class="sub">${s.won + s.lost
+      ? `<span class="profit">${s.won} hit</span> · <span class="loss">${s.lost} missed</span>${s.scratched ? ` · ${s.scratched} scratched` : ''} · ${esc(pick)}, all time`
+      : `No settled ${esc(pick)} bets yet`}</div>`;
+}
+
 $('#winRate').addEventListener('click', e => {
-  const b = e.target.closest('[data-range]');
-  if (!b) return;
-  state.wrRange = b.dataset.range;
+  const range = e.target.closest('[data-range]'), hr = e.target.closest('[data-hr]');
+  if (range) state.wrRange = range.dataset.range;
+  else if (hr) state.hrBet = hr.dataset.hr;
+  else return;
   save();
   renderWinRate();
 });
@@ -447,14 +512,26 @@ const BET_TYPES = [['Win', '1st'], ['Place', '1st–2nd'], ['Show', '1st–3rd']
 const HORSE_HINTS = { Exacta: 'e.g. 3-5', Trifecta: 'e.g. 3-5-1', Superfecta: 'e.g. 3-5-1-2', 'Super High Five': 'e.g. 3-5-1-2-7',
   'Pick 3': 'e.g. 3/5/1', 'Pick 5': 'e.g. 3/5/1/2/7' };
 
-// Rows start blank; only the Database tab's "Log bet" passes values in
+// The Bet type list holds only the current mode's types
+const betTypeOptions = selected => '<option value="">Select…</option>' + modeBetTypes().map(([t, places]) =>
+  `<option value="${t}" ${selected === t ? 'selected' : ''}>${t} (${places})</option>`).join('');
+
+// After a mode switch, each row keeps its type if the new mode offers it, and is cleared otherwise
+function syncBetTypes() {
+  $$('#betRows [name=type]').forEach(sel => {
+    const was = sel.value;
+    sel.innerHTML = betTypeOptions(was);
+    if (sel.value !== was) sel.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+}
+
+// Rows start blank
 function betRowHTML(prev = {}) {
   return `
     <tr>
       <td><input type="number" name="race" min="1" max="20" required class="w-xs" value="${esc(prev.race || '')}"></td>
       <td><input type="text" name="horse" required inputmode="numeric" placeholder="#" class="w-xs" value="${esc(prev.horse || '')}"></td>
-      <td><select name="type" required><option value="">Select…</option>${BET_TYPES.map(([t, places]) =>
-        `<option value="${t}" ${prev.type === t ? 'selected' : ''}>${t} (${places})</option>`).join('')}</select></td>
+      <td><select name="type" required>${betTypeOptions(prev.type)}</select></td>
       <td><input type="number" name="stake" min="0" step="0.01" required class="w-sm" value="${esc(prev.stake ?? '')}"></td>
       <td><select name="result" required>
         <option value="">Select…</option><option value="won">Won</option><option value="lost">Lost</option><option value="scratched">Scratched</option>
@@ -667,12 +744,14 @@ function renderRaces() {
 
   $('#exoticCard').classList.toggle('hidden', !tracks.length);
   // Easiest to hardest, by the same difficulty stars as the Risk Matrix's exotic wager table,
-  // colored the same way: vertical (one race) in cyan, horizontal (several races) in pink. Each opens its calculator.
+  // colored the same way: vertical (one race) in cyan, horizontal (several races) in pink.
+  // Each shows today's 10 most likely tickets for that wager underneath (Exotic mode only).
   $('#exoticTiles').innerHTML = [...EXOTIC_INFO].sort((a, b) => a.stars - b.stars).map(d => `
-    <button type="button" class="exotic-tile ${d.kind}" data-calc="${esc(d.name)}" title="Calculate the most likely ${esc(d.name)} combinations">
+    <button type="button" class="exotic-tile ${d.kind}" data-calc="${esc(d.name)}" title="Today's 10 most likely ${esc(d.name)} tickets">
       <span class="tile-play" aria-hidden="true">${PLAY_SVG}</span>
       <b>${esc(d.name)}</b>${starsHTML(d.stars)}<span class="tile-desc">${esc(d.short)}</span>
       <span class="kind-tag ${d.kind}">${d.kind === 'vertical' ? 'Single Race' : 'Multiple Races'}</span></button>`).join('');
+  if (isExotic() && tracks.length) renderExoticResults();
 
   const track = tracks.find(x => x.key === racesView.key);
   if (!track) {
@@ -747,14 +826,18 @@ $('#racesTracks').addEventListener('click', async e => {
   renderRaces();
 });
 
+// Pressing a tile shows its top 10 under the tiles; pressing it again hides them
 $('#exoticCard').addEventListener('click', e => {
   const tile = e.target.closest('[data-calc]');
-  if (tile) openCalculator(tile.dataset.calc);
+  if (!tile) return;
+  exoticPick = exoticPick === tile.dataset.calc ? null : tile.dataset.calc;
+  renderExoticResults();
 });
 
 /* =========================================================
-   Exotic calculator — each Exotic Wagering tile opens it. It turns every runner's career record
-   into chances for this race, then chains them into the bet's 10 most likely combinations.
+   Exotic calculator — each Exotic Wagering tile runs it over every race scraped today. It turns
+   each runner's career record into chances for its race, then chains them into combinations;
+   the day's 10 most likely tickets for that wager show under the tiles.
    1. Shrink each record toward an average horse (1 in 8 to finish 1st, 2nd or 3rd) by adding
       K = 10 average starts: short records move a lot, long ones barely.
    2. Win chances = adjusted win rates, scaled so the field adds up to 100%.
@@ -870,19 +953,7 @@ const chanceText = p => { const v = p * 100; return (v >= 1 ? v.toFixed(1) : v >
 // Fair odds: what a winning ticket should pay, to 1, for the bet to break even
 const fairOdds = p => { const o = (1 - p) / p; return (o < 10 ? +o.toFixed(1) : Math.round(o)).toLocaleString() + '-1'; };
 
-let calcView = null;  // { bet, key, start }
-
-function openCalculator(name) {
-  const tracks = racesTracks(today());
-  if (!tracks.length) return toast("Scrape today's tracks first");
-  calcView = {
-    bet: EXOTIC_INFO.find(d => d.name === name),
-    key: tracks.some(t => t.key === racesView.key) ? racesView.key : tracks[0].key,
-    start: racesView.race,
-  };
-  openModal('<div id="calcBody"></div>', { wide: true });
-  drawCalculator();
-}
+let exoticPick = null;  // the wager whose top 10 shows under the tiles
 
 // The races a bet can use at a track: single races, or runs of consecutive races for Pick bets
 function calcOptions(track, bet) {
@@ -903,68 +974,81 @@ function calcOptions(track, bet) {
   });
 }
 
-function drawCalculator() {
-  const { bet } = calcView;
+// Every race (or run of races, for Pick bets) scraped today, searched for the wager's most likely tickets.
+// Each race's own top 10 holds everything it could add to the day's top 10, so those are merged.
+function dayTopCombos(bet) {
   const tracks = racesTracks(today());
-  const track = tracks.find(t => t.key === calcView.key) || tracks[0];
-  if (!track) return closeModal();
-  calcView.key = track.key;
-  const options = calcOptions(track, bet);
-  const usable = options.filter(o => !o.why);
-  const pick = usable.find(o => o.n === calcView.start) || usable[0];
-  if (pick) calcView.start = pick.n;
-  const horizontal = bet.kind === 'horizontal';
+  const found = [], skipped = [];
+  let searched = 0;
+  tracks.forEach(t => calcOptions(t, bet).forEach(o => {
+    if (o.why) return skipped.push({ track: t.name, label: o.label, why: o.why });
+    searched++;
+    const combos = bet.kind === 'horizontal' ? topHorizontal(o.models, o.nums) : topVertical(o.models[0], bet.legs);
+    combos.forEach(c => found.push({ ...c, track: t.name, label: o.label }));
+  }));
+  return { top: found.sort((a, b) => b.p - a.p).slice(0, CALC.results), searched, skipped, tracks: tracks.length };
+}
 
-  let body;
-  if (!pick) {
-    body = `<p class="xc-empty">No ${horizontal ? 'run of races' : 'race'} at ${esc(track.name)} has enough data for a ${esc(bet.name)}.
-      ${horizontal ? `It needs ${bet.legs} races in a row, all scraped, each with enough runners that have ${CALC.minStarts}+ starts.` : ''}</p>`;
-  } else {
-    const results = horizontal ? topHorizontal(pick.models, pick.nums) : topVertical(pick.models[0], bet.legs);
-    const thin = pick.models.flatMap((m, i) => m.thin.map(h => `${horizontal ? `R${pick.nums[i]} ` : ''}#${esc(h.pp)} ${esc(h.horse)}`));
-    const running = pick.models.map((m, i) => `${horizontal ? `Race ${pick.nums[i]}: ` : ''}${m.field.length} running${m.scratched ? `, ${m.scratched} scratched` : ''}`);
-    body = `
-      <p class="muted small-text xc-field">${running.join(' · ')}.
-        ${thin.length ? `Left out (fewer than ${CALC.minStarts} starts): ${thin.join(', ')}.` : 'Every runner has enough starts.'}</p>
-      <ol class="xc-results">${results.map((r, i) => `
-        <li class="xc-row">
-          <span class="xc-rank">${i + 1}</span>
-          <div class="xc-combo">
-            <div class="xc-cloths">${r.legs.map(l => horizontal
-              ? `<span class="xc-leg"><small>R${l.race}</small>${cloth(l.num)}</span>` : cloth(l.num)).join(`<span class="xc-sep">${horizontal ? '/' : '–'}</span>`)}</div>
-            <div class="xc-names">${r.legs.map(l => esc(l.name)).join(' › ')}</div>
-          </div>
-          <div class="xc-odds"><b>${chanceText(r.p)}</b><span title="Fair odds: a winning ticket needs to pay more than this to be worth it">${fairOdds(r.p)}</span></div>
-        </li>`).join('') || '<li class="xc-empty">Not enough qualified runners for this bet.</li>'}</ol>
-      <p class="muted tiny xc-note">Chance of the combination hitting, and its <b>fair odds</b>: the ticket is only worth playing when TwinSpires' payout beats them.</p>`;
+function renderExoticResults() {
+  $$('#exoticTiles [data-calc]').forEach(t => {
+    const on = t.dataset.calc === exoticPick;
+    t.classList.toggle('active', on);
+    t.setAttribute('aria-pressed', on);
+  });
+  const box = $('#exoticResults');
+  const bet = EXOTIC_INFO.find(d => d.name === exoticPick);
+  if (!bet) {
+    box.dataset.key = '';
+    box.innerHTML = `<p class="muted small-text xc-hint">Press a wager to see today's 10 most likely tickets across every scraped race.</p>`;
+    return;
   }
+  // Recalculated only when the wager or today's races change, so open sections stay open
+  const key = bet.name + '|' + JSON.stringify(state.cards && state.cards.tracks);
+  if (box.dataset.key === key) return;
+  box.dataset.key = key;
 
-  $('#calcBody').innerHTML = `
-    <div class="xc-head">
-      <h3>${esc(bet.name)} <span class="kind-tag ${bet.kind}">${horizontal ? 'Multiple Races' : 'Single Race'}</span></h3>
-      ${starsHTML(bet.stars)}
-    </div>
-    <div class="xc-controls">
-      <label>Track<select id="calcTrack">${tracks.map(t => `<option value="${esc(t.key)}" ${t.key === track.key ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</select></label>
-      <label>${horizontal ? 'Races' : 'Race'}<select id="calcRace">${options.map(o =>
-        `<option value="${o.n}" ${pick && o.n === pick.n ? 'selected' : ''} ${o.why ? 'disabled' : ''}>${o.label}${o.why ? ` (${esc(o.why)})` : ''}</option>`).join('')}</select></label>
-    </div>
-    ${body}
-    <details class="xc-how">
-      <summary>How it's calculated</summary>
-      <ol>
-        <li>Each runner's record is blended with an average horse's, as if it had 10 more ordinary starts, so a hot 2-for-4 doesn't outrank a steady 8-for-40.</li>
-        <li>Win chances are scaled so the field adds up to 100%.</li>
-        <li>2nd and 3rd use how often each horse finishes exactly 2nd or 3rd; 4th and 5th use its top-3 rate. Horses already placed are taken out at each step.</li>
-        <li>Pick 3 and Pick 5 multiply each race's win chances together.</li>
-      </ol>
-      <p>Runners with fewer than ${CALC.minStarts} starts still count against everyone's chances, but are never suggested. Races where they're more than a third of the field are skipped. Career records are all it uses: morning-line odds, recent form and surface or distance records would sharpen it.</p>
-    </details>
-    <div class="modal-actions"><button class="btn ghost" id="calcClose" type="button">Close</button></div>`;
-
-  $('#calcTrack').onchange = e => { calcView.key = e.target.value; drawCalculator(); };
-  $('#calcRace').onchange = e => { calcView.start = +e.target.value; drawCalculator(); };
-  $('#calcClose').onclick = closeModal;
+  const { top, searched, skipped, tracks } = dayTopCombos(bet);
+  const horizontal = bet.kind === 'horizontal';
+  const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+  box.innerHTML = `
+    <div class="xc-panel ${bet.kind}">
+      <div class="xc-head">
+        <h3>${esc(bet.name)}: today's top 10 <span class="kind-tag ${bet.kind}">${horizontal ? 'Multiple Races' : 'Single Race'}</span></h3>
+        <span class="muted small-text">Searched ${horizontal ? plural(searched, `run`) + ` of ${bet.legs} races` : plural(searched, 'race')} at ${plural(tracks, 'track')}</span>
+      </div>
+      ${top.length ? `
+        <ol class="xc-results">${top.map((r, i) => `
+          <li class="xc-row">
+            <span class="xc-rank">${i + 1}</span>
+            <div class="xc-where"><b>${esc(r.track)}</b><span>${esc(r.label)}</span></div>
+            <div class="xc-combo">
+              <div class="xc-cloths">${r.legs.map(l => horizontal
+                ? `<span class="xc-leg"><small>R${l.race}</small>${cloth(l.num)}</span>` : cloth(l.num)).join(`<span class="xc-sep">${horizontal ? '/' : '–'}</span>`)}</div>
+              <div class="xc-names">${r.legs.map(l => esc(l.name)).join(' › ')}</div>
+            </div>
+            <div class="xc-odds"><b>${chanceText(r.p)}</b><span title="Fair odds: a winning ticket needs to pay more than this to be worth it">${fairOdds(r.p)}</span></div>
+          </li>`).join('')}</ol>
+        <p class="muted tiny xc-note">Chance of the ticket hitting, and its <b>fair odds</b>: it's only worth playing when TwinSpires' payout beats them.
+          Runners with fewer than ${CALC.minStarts} starts are never suggested.</p>`
+      : `<p class="xc-empty">No ${horizontal ? `run of ${bet.legs} races in a row` : 'race'} scraped today has enough data for a ${esc(bet.name)}.
+          ${horizontal ? `Every race in the run must be scraped, and most of its runners need ${CALC.minStarts}+ starts.` : ''}</p>`}
+      ${skipped.length ? `
+        <details class="xc-how">
+          <summary>${plural(skipped.length, horizontal ? 'run' : 'race')} skipped</summary>
+          <ul class="xc-skipped">${skipped.map(s => `<li><b>${esc(s.track)}</b> ${esc(s.label)}: ${esc(s.why)}</li>`).join('')}</ul>
+        </details>` : ''}
+      <details class="xc-how">
+        <summary>How it's calculated</summary>
+        <ol>
+          <li>Each runner's record is blended with an average horse's, as if it had 10 more ordinary starts, so a hot 2-for-4 doesn't outrank a steady 8-for-40.</li>
+          <li>Win chances are scaled so the field adds up to 100%.</li>
+          <li>2nd and 3rd use how often each horse finishes exactly 2nd or 3rd; 4th and 5th use its top-3 rate. Horses already placed are taken out at each step.</li>
+          <li>Pick 3 and Pick 5 multiply each race's win chances together.</li>
+          <li>Every scraped race is searched, and the 10 most likely tickets of the day are kept.</li>
+        </ol>
+        <p>Runners with fewer than ${CALC.minStarts} starts still count against everyone's chances, but are never suggested. Races where they're more than a third of the field are skipped. Career records are all it uses: morning-line odds, recent form and surface or distance records would sharpen it.</p>
+      </details>
+    </div>`;
 }
 
 $('#racesCalc').addEventListener('click', e => {
@@ -1512,17 +1596,22 @@ function mejiroCapture(site) {
 }
 
 /* =========================================================
-   Strategies — short notes, grouped by categories you name (Edit categories).
+   Strategies — short notes, kept per mode. Basic is one list of Win / Place / Show notes;
+   Exotic groups its notes by categories you name (Edit categories).
    Drag the ☰ handle to reorder within a group; a note's menu moves it to another category.
    ========================================================= */
 
 const strategyById = id => state.strategies.find(s => s.id === id);
 const categories = () => state.strategyCategories || [];
+// Notes from before the modes have no mode: categorized ones were exotic, the rest Win / Place / Show
+const strategyMode = s => s.mode || (s.category ? 'exotic' : 'basic');
 
 function renderStrategies() {
-  const cats = categories();
+  // Stamp older notes with their mode, so clearing a category later can't move them to Basic
+  (state.strategies || []).forEach(s => { if (!s.mode) s.mode = strategyMode(s); });
+  const cats = isExotic() ? categories() : [];
   const known = new Set(cats.map(c => c.id));
-  const notes = state.strategies || [];
+  const notes = (state.strategies || []).filter(s => strategyMode(s) === (isExotic() ? 'exotic' : 'basic'));
   // One group per category, then Uncategorized (shown when it has notes, or before any category exists)
   const groups = [...cats, { id: '', name: cats.length ? 'Uncategorized' : 'Your strategies' }];
   const inGroup = g => notes.filter(s => (known.has(s.category) ? s.category : '') === g.id);
@@ -1547,7 +1636,7 @@ function renderStrategies() {
 }
 
 function addStrategy(category) {
-  const s = { id: uid(), text: '', category };
+  const s = { id: uid(), text: '', mode: isExotic() ? 'exotic' : 'basic', category };
   state.strategies = [...(state.strategies || []), s];
   save();
   renderStrategies();
@@ -1587,7 +1676,7 @@ function openCategoryEditor() {
   const draw = () => {
     openModal(`
       <h3>Edit categories</h3>
-      <p class="muted small-text">Group your strategies however you like: Wins, Exactas, Pick 5s… Deleting a category moves its strategies to Uncategorized.</p>
+      <p class="muted small-text">Group your exotic strategies however you like: Exactas, Trifecta boxes, Pick 5s… Deleting a category moves its strategies to Uncategorized.</p>
       <ul class="cat-list">${draft.map((c, i) => `
         <li><input type="text" data-i="${i}" value="${esc(c.name)}" placeholder="Category name" maxlength="40">
           <button type="button" class="btn tiny-btn ghost danger" data-del="${i}" title="Delete category">✕</button></li>`).join('')
@@ -1635,8 +1724,9 @@ $('#strategyGroups').addEventListener('pointerdown', e => {
   const end = () => {
     handle.removeEventListener('pointermove', move);
     row.classList.remove('dragging');
+    // This mode's notes in their new order, then the other mode's, untouched
     const order = $$('#strategyGroups .strategy').map(li => li.dataset.id);
-    state.strategies = order.map(strategyById).filter(Boolean);
+    state.strategies = [...order.map(strategyById).filter(Boolean), ...state.strategies.filter(s => !order.includes(s.id))];
     save();
   };
   handle.addEventListener('pointermove', move);
@@ -1890,10 +1980,11 @@ $('#exoticReset').addEventListener('click', async () => {
 // Program numbers show as "#5" (or "#1A" for coupled entries); older bets saved a horse's name
 function horseLabel(h) { return /^\d+[A-Z]?$/i.test(String(h).trim()) ? '#' + String(h).trim().toUpperCase() : h; }
 
+// This mode's bets only: Win / Place / Show in Basic, exotic wagers in Exotic
 function historyRows() {
   const track = $('#histTrack').value, type = $('#histType').value, result = $('#histResult').value;
   const from = $('#histFrom').value, to = $('#histTo').value;
-  return state.bets
+  return modeBets()
     .filter(b => (!track || b.track === track) && (!type || b.type === type) && (!result || b.status === result) && (!from || b.date >= from) && (!to || b.date <= to))
     .sort((a, b) => a.date.localeCompare(b.date) || num(a.race) - num(b.race) || (a.settledAt || '').localeCompare(b.settledAt || ''));
 }
@@ -1941,7 +2032,7 @@ function renderHistory() {
   $('#histTable').innerHTML = `
     <thead><tr><th>Date</th><th>Track</th><th>Race</th><th>Horse #</th><th>Type</th><th>Result</th>
       <th class="num">Stake</th><th class="num">Return</th><th class="num">P/L</th><th class="num">Running</th><th></th></tr></thead>
-    <tbody>${body || '<tr><td colspan="11" class="empty">No bets logged yet. Log one from the Tracker.</td></tr>'}</tbody>`;
+    <tbody>${body || `<tr><td colspan="11" class="empty">No ${isExotic() ? 'exotic' : 'Win / Place / Show'} bets here yet. Log one from the Tracker.</td></tr>`}</tbody>`;
 }
 
 ['#histTrack', '#histType', '#histResult', '#histFrom', '#histTo'].forEach(id => $(id).addEventListener('change', renderHistory));
@@ -1981,8 +2072,9 @@ function download(name, text, type) {
 $('#exportCsv').addEventListener('click', () => {
   const cols = ['date', 'track', 'race', 'horse', 'type', 'stake', 'status', 'payout', 'profit'];
   const cell = v => /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : v;
-  const lines = state.bets.map(b => cols.map(c => cell(c === 'profit' ? profitOf(b).toFixed(2) : b[c] ?? '')).join(','));
-  download(`mejiro-bets-${today()}.csv`, [cols.join(','), ...lines].join('\n'), 'text/csv');
+  // This mode's bets, like the History table
+  const lines = modeBets().map(b => cols.map(c => cell(c === 'profit' ? profitOf(b).toFixed(2) : b[c] ?? '')).join(','));
+  download(`mejiro-${isExotic() ? 'exotic' : 'basic'}-bets-${today()}.csv`, [cols.join(','), ...lines].join('\n'), 'text/csv');
 });
 
 /* =========================================================
