@@ -366,6 +366,15 @@ input[type="date"] { color-scheme: dark; }
 .xc-panel.horizontal .xc-head h3 { color: #FFB3E6; }
 .xc-results { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .xc-row { display: grid; grid-template-columns: 26px 170px 1fr auto; align-items: center; gap: 12px; padding: 9px 12px; border-radius: 10px; background: var(--surface-2); }
+.xc-results .xc-row { cursor: pointer; transition: background .15s, opacity .15s; }
+.xc-results .xc-row:hover { background: #1C1628; }
+.xc-results .xc-row:focus-visible { outline: 2px solid var(--violet); outline-offset: 2px; }
+/* A ticket you've marked as bet: greyed out, saddle cloths included */
+.xc-results .xc-row.played { background: #121016; box-shadow: none; opacity: .5; }
+.xc-row.played:hover { background: #17141c; opacity: .7; }
+.xc-row.played .cloth { filter: grayscale(1); }
+.xc-row.played .xc-where b, .xc-row.played .xc-odds b, .xc-row.played .xc-odds span { color: var(--muted); }
+.xc-row.played .xc-rank { color: var(--profit); font-size: 15px; }
 .xc-where { display: flex; flex-direction: column; min-width: 0; font-size: 13px; }
 .xc-where b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .xc-where span { color: var(--muted); font-size: 12px; }

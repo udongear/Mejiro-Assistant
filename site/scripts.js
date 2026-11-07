@@ -1008,6 +1008,32 @@ $('#exoticCard').addEventListener('click', e => {
   renderExoticResults();
 });
 
+/* A top-10 ticket you've bet on can be greyed out. The marks are kept with the day's race cards
+   (state.cards.played), so they last through reloads and start fresh the next day. */
+const ticketKey = (bet, r) => [bet.name, r.track, r.label, r.legs.map(l => l.num).join('-')].join('|');
+
+function togglePlayed(row) {
+  const played = new Set(state.cards.played || []);
+  const on = !played.has(row.dataset.ticket);
+  if (on) played.add(row.dataset.ticket); else played.delete(row.dataset.ticket);
+  state.cards.played = [...played];
+  save();
+  // Changed in place: the list isn't recalculated for a mark
+  row.classList.toggle('played', on);
+  row.setAttribute('aria-pressed', on);
+  row.title = on ? 'Marked as bet. Click to unmark' : 'Click to mark that you bet this';
+  row.querySelector('.xc-rank').textContent = on ? '✓' : [...row.parentElement.children].indexOf(row) + 1;
+}
+
+$('#exoticResults').addEventListener('click', e => {
+  const row = e.target.closest('[data-ticket]');
+  if (row) togglePlayed(row);
+});
+$('#exoticResults').addEventListener('keydown', e => {
+  const row = e.target.closest('[data-ticket]');
+  if (row && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); togglePlayed(row); }
+});
+
 /* =========================================================
    Exotic calculator — each Exotic Wagering tile runs it over every race scraped today. It turns
    each runner's career record into chances for its race, then chains them into combinations;
@@ -1184,6 +1210,7 @@ function renderExoticResults() {
   const { top, searched, skipped, tracks } = dayTopCombos(bet);
   const horizontal = bet.kind === 'horizontal';
   const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+  const played = new Set(state.cards.played || []);
   box.innerHTML = `
     <div class="xc-panel ${bet.kind}">
       <div class="xc-head">
@@ -1191,9 +1218,12 @@ function renderExoticResults() {
         <span class="muted small-text">Searched ${horizontal ? plural(searched, `run`) + ` of ${bet.legs} races` : plural(searched, 'race')} at ${plural(tracks, 'track')}</span>
       </div>
       ${top.length ? `
-        <ol class="xc-results">${top.map((r, i) => `
-          <li class="xc-row">
-            <span class="xc-rank">${i + 1}</span>
+        <ol class="xc-results">${top.map((r, i) => {
+          const ticket = ticketKey(bet, r), on = played.has(ticket);
+          return `
+          <li class="xc-row ${on ? 'played' : ''}" data-ticket="${esc(ticket)}" role="button" tabindex="0" aria-pressed="${on}"
+            title="${on ? 'Marked as bet. Click to unmark' : 'Click to mark that you bet this'}">
+            <span class="xc-rank">${on ? '✓' : i + 1}</span>
             <div class="xc-where"><b>${esc(r.track)}</b><span>${esc(r.label)}</span></div>
             <div class="xc-combo">
               <div class="xc-cloths">${r.legs.map(l => horizontal
@@ -1201,9 +1231,10 @@ function renderExoticResults() {
               <div class="xc-names">${r.legs.map(l => esc(l.name)).join(' › ')}</div>
             </div>
             <div class="xc-odds"><b>${chanceText(r.p)}</b><span title="Fair odds: a winning ticket needs to pay more than this to be worth it">${fairOdds(r.p)}</span></div>
-          </li>`).join('')}</ol>
+          </li>`;
+        }).join('')}</ol>
         <p class="muted tiny xc-note">Chance of the ticket hitting, and its <b>fair odds</b>: it's only worth playing when TwinSpires' payout beats them.
-          Runners with fewer than ${CALC.minStarts} starts are never suggested.</p>`
+          Runners with fewer than ${CALC.minStarts} starts are never suggested. Click a ticket to grey it out once you've bet it.</p>`
       : `<p class="xc-empty">No ${horizontal ? `run of ${bet.legs} races in a row` : 'race'} scraped today has enough data for a ${esc(bet.name)}.
           ${horizontal ? `Every race in the run must be scraped, and most of its runners need ${CALC.minStarts}+ starts.` : ''}</p>`}
       ${skipped.length ? `
