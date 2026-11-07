@@ -686,6 +686,7 @@ function updateBetRows() {
 function resetBetForm() {
   $('#betForm').date.value = '';
   $('#betRows').innerHTML = betRowHTML();
+  $('#importNote').classList.add('hidden');
   updateBetRows();
 }
 
@@ -771,7 +772,7 @@ $('#betForm').addEventListener('submit', e => {
     const winners = tr.querySelector('.winners-btn').dataset.winners;
     return {
       id: uid(),
-      date: f.date.value,
+      date: tr.dataset.date || f.date.value,  // imported rows from another day keep their own date
       track: v('track').value.trim(),
       race: v('race').value,
       // Saved like 5, 3-5-1, or 3/5/1 for a Pick bet
@@ -793,6 +794,125 @@ $('#betForm').addEventListener('submit', e => {
   resetBetForm();
   const pl = logged.reduce((s, b) => s + profitOf(b), 0);
   toast(`Logged ${logged.length === 1 ? '1 bet' : logged.length + ' bets'}: ${money(pl, true)}`);
+});
+
+/* ----- Import from TwinSpires: its account history CSV (Date, Time, Type, Track, Race, Pool, Base,
+   Runners, Debit, Credit) fills in rows to check and log. One line is one bet; Runners read like
+   "4,WT,5", where WT ("with") separates the places, or the races of a Pick bet. ----- */
+
+// Quoted fields can hold commas ("4,WT,5")
+function parseCSV(text) {
+  const rows = [];
+  let row = [], field = '', quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quoted) {
+      if (c === '"' && text[i + 1] === '"') { field += '"'; i++; }
+      else if (c === '"') quoted = false;
+      else field += c;
+    } else if (c === '"') quoted = true;
+    else if (c === ',') { row.push(field); field = ''; }
+    else if (c === '\n' || c === '\r') {
+      if (c === '\r' && text[i + 1] === '\n') i++;
+      row.push(field); rows.push(row); row = []; field = '';
+    } else field += c;
+  }
+  if (field || row.length) { row.push(field); rows.push(row); }
+  return rows.filter(r => r.some(f => f.trim()));
+}
+
+// TwinSpires pool names, compared in lowercase without spaces or punctuation
+const POOL_TYPES = { win: 'Win', place: 'Place', show: 'Show', exacta: 'Exacta', trifecta: 'Trifecta', superfecta: 'Superfecta',
+  superhighfive: 'Super High Five', superhigh5: 'Super High Five', superhi5: 'Super High Five', sh5: 'Super High Five', pick3: 'Pick 3', pick5: 'Pick 5' };
+
+// The wagers in a TwinSpires CSV, or null if the file isn't one
+function readTwinSpiresCSV(text) {
+  const [head, ...lines] = parseCSV(text.replace(/^﻿/, ''));
+  const col = Object.fromEntries((head || []).map((h, i) => [h.trim().toLowerCase(), i]));
+  if (!['date', 'track', 'race', 'pool', 'runners', 'debit', 'credit'].every(k => k in col)) return null;
+  const get = (r, k) => (k in col ? r[col[k]] || '' : '').trim();
+  return lines.filter(r => !('type' in col) || /^wager$/i.test(get(r, 'type'))).map(r => {
+    // Times are UTC (a 9 pm race shows as 2 am the next day), so they become your own date
+    const [m, d, y] = get(r, 'date').split('/').map(Number);
+    const [hh = 0, mm = 0, ss = 0] = get(r, 'time').split(':').map(Number);
+    const when = new Date(Date.UTC(y < 100 ? 2000 + y : y, m - 1, d, hh || 0, mm || 0, ss || 0));
+    const legs = get(r, 'runners').split(',').map(s => s.trim()).filter(Boolean)
+      .reduce((acc, t) => { if (/^wt$/i.test(t)) acc.push([]); else acc[acc.length - 1].push(t); return acc; }, [[]]);
+    const type = POOL_TYPES[get(r, 'pool').toLowerCase().replace(/[^a-z0-9]/g, '')] || null;
+    const spec = type && pickSpec(type);
+    const debit = num(get(r, 'debit')), credit = num(get(r, 'credit'));
+    return {
+      date: isNaN(when) ? '' : localISO(when),
+      track: get(r, 'track'), race: get(r, 'race'), pool: get(r, 'pool'), type,
+      // One horse per place or race; anything else (a box, several horses in a spot) is left for you to pick
+      picks: spec && legs.length === spec.legs && legs.every(l => l.length === 1 && /^\d+$/.test(l[0])) ? legs.map(l => +l[0]) : [],
+      stake: debit,
+      // Nothing back = lost; exactly the stake back = a scratch refund; more = a win, Credit being the total return
+      result: credit === 0 ? 'lost' : Math.abs(credit - debit) < 0.005 ? 'scratched' : 'won',
+      payout: credit,
+    };
+  });
+}
+
+$('#importCsv').addEventListener('change', async e => {
+  const file = e.target.files[0];
+  e.target.value = '';  // so the same file can be picked again
+  if (!file) return;
+  const all = readTwinSpiresCSV(await file.text());
+  if (!all) return toast("That doesn't look like a TwinSpires account history CSV");
+
+  // Only this mode's bets; leave out any already logged (same day, track, race, type, horses and stake)
+  const mine = all.filter(b => b.type && isExoticType(b.type) === isExotic());
+  const sig = b => [b.date, b.track.toLowerCase(), num(b.race), b.type, b.horse, num(b.stake).toFixed(2)].join('|');
+  const logged = new Map();
+  state.bets.forEach(b => logged.set(sig(b), (logged.get(sig(b)) || 0) + 1));
+  const fresh = mine.filter(b => {
+    const k = sig({ ...b, horse: b.picks.join(pickSpec(b.type).kind === 'horizontal' ? '/' : '-') });
+    if (!logged.get(k)) return true;
+    logged.set(k, logged.get(k) - 1);
+    return false;
+  });
+
+  if (fresh.length) {
+    // Blank rows make way; the Date box takes the day most of the bets were on
+    $$('#betRows tr').forEach(tr => { if (!tr.querySelector('[name=track]').value && !tr.querySelector('[name=type]').value) tr.remove(); });
+    const f = $('#betForm');
+    const days = fresh.map(b => b.date);
+    if (!f.date.value) f.date.value = days.sort((a, b) => days.filter(x => x === b).length - days.filter(x => x === a).length)[0];
+    fresh.forEach(b => {
+      $('#betRows').insertAdjacentHTML('beforeend', betRowHTML({ track: b.track }));
+      const tr = $$('#betRows tr').pop(), v = n => tr.querySelector(`[name=${n}]`);
+      const fire = el => el.dispatchEvent(new Event('change', { bubbles: true }));
+      // A bet from another day keeps its own date, shown under the racetrack
+      if (b.date && b.date !== f.date.value) {
+        tr.dataset.date = b.date;
+        v('track').insertAdjacentHTML('afterend', `<small class="row-date">${esc(fmtDate(b.date))}</small>`);
+      }
+      v('race').value = b.race;
+      v('type').value = b.type; fire(v('type'));
+      v('stake').value = +b.stake.toFixed(2);
+      tr.querySelector('.horse-btn').dataset.picks = b.picks.join(',');
+      v('result').value = b.result; fire(v('result'));
+      if (b.result === 'won') v('payout').value = +b.payout.toFixed(2);
+    });
+    updateBetRows();
+  }
+
+  // What was filled in, and what wasn't
+  const other = all.filter(b => b.type && isExoticType(b.type) !== isExotic()).length;
+  const unknown = [...new Set(all.filter(b => !b.type).map(b => b.pool || 'unknown'))];
+  const needPicks = fresh.filter(b => !b.picks.length).length;
+  const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+  const notes = [
+    fresh.length ? `Filled in ${plural(fresh.length, 'bet')} from TwinSpires. Check them, add anything missing${isExotic() ? ' (like Actual winners)' : ''}, then log.` : 'No new bets to fill in.',
+    mine.length > fresh.length ? `${plural(mine.length - fresh.length, 'bet')} already logged, so left out.` : '',
+    needPicks ? `${plural(needPicks, 'bet')} used several horses in a spot (a box or key), so pick ${needPicks === 1 ? 'its' : 'their'} Horse # yourself.` : '',
+    other ? `${plural(other, isExotic() ? 'Win / Place / Show bet' : 'exotic bet')} in the file belong${other === 1 ? 's' : ''} to ${isExotic() ? 'Basic' : 'Exotic'} mode: switch and import again for ${other === 1 ? 'it' : 'them'}.` : '',
+    unknown.length ? `Not tracked here: ${unknown.map(esc).join(', ')}.` : '',
+    fresh.some(b => b.result === 'lost') ? 'Bets that paid nothing are set to Lost; change any race that hasn\'t run yet.' : '',
+  ].filter(Boolean);
+  $('#importNote').innerHTML = notes.map(n => n.startsWith('Not tracked') ? n : esc(n)).join('<br>');
+  $('#importNote').classList.remove('hidden');
 });
 
 // Bets saved before the Tracker logged results are still "open"; History settles them

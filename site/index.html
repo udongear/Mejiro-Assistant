@@ -71,7 +71,10 @@
         <div class="stats" id="stats"></div>
 
         <div class="card">
-          <h3>Log bets</h3>
+          <div class="card-head">
+            <h3>Log bets</h3>
+            <label class="btn tiny-btn file-btn" title="TwinSpires: My Account → History → Export (.csv)">Import TwinSpires CSV<input type="file" id="importCsv" accept=".csv,text/csv" hidden></label>
+          </div>
           <form id="betForm">
             <div class="bet-shared">
               <label>Date<input type="date" name="date" required></label>
@@ -88,6 +91,7 @@
               </table>
             </div>
             <p class="bet-error hidden" id="betError" role="alert"></p>
+            <p class="import-note hidden" id="importNote" role="status"></p>
             <div class="bet-actions">
               <button type="button" class="btn" id="addBetRow">+ Add another bet</button>
               <button class="btn primary" type="submit" id="logBetsBtn">Log bet</button>
