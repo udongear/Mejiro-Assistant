@@ -439,11 +439,17 @@ input[type="date"] { color-scheme: dark; }
 /* Tracker: log bets */
 .bet-shared { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
 .bet-shared label { width: 220px; max-width: 100%; }
-.bet-rows td { padding: 6px 6px; }
-.bet-rows th { padding: 8px 6px; }
+.table.bet-rows td { padding: 6px 4px; }
+.table.bet-rows th { padding: 8px 4px; }
 .bet-rows select { width: auto; }
 .table input.w-xs { width: 72px; }
 .table input.w-sm { width: 110px; }
+.table input.w-md { width: 190px; }
+/* Log bets has up to nine columns in Exotic, so its boxes run a little narrower */
+.bet-rows input.w-md { width: 150px; }
+.bet-rows input.w-sm { width: 92px; }
+.bet-rows select[name="type"] { max-width: 230px; }
+.bet-rows input[name="payout"] { width: 104px; }
 .table input:disabled { opacity: .35; }
 .bet-actions { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
 

@@ -75,12 +75,13 @@
           <form id="betForm">
             <div class="bet-shared">
               <label>Date<input type="date" name="date" required></label>
-              <label>Track<input name="track" list="trackList" required autocomplete="off" placeholder="Type or pick a track"><datalist id="trackList"></datalist></label>
             </div>
+            <!-- Every row's Racetrack box suggests today's scraped tracks and ones you've bet on -->
+            <datalist id="trackList"></datalist>
             <div class="table-wrap">
               <table class="table bet-rows">
                 <thead><tr>
-                  <th>Race #</th><th>Horse #</th><th>Bet type</th><th>Stake ($)</th><th>Result</th>
+                  <th>Racetrack</th><th>Race #</th><th>Bet type</th><th>Horse #</th><th>Stake ($)</th><th>Result</th>
                   <th>Total return ($)</th><th class="only-exotic" title="For a loss: the horses that actually finished">Actual winners</th><th></th>
                 </tr></thead>
                 <tbody id="betRows"></tbody>

@@ -523,16 +523,18 @@ function syncBetTypes() {
   $$('#betRows tr').forEach(syncHorse);
 }
 
-// Rows start blank. Horse # is a text box in Basic (one horse), and a number picker in Exotic,
-// where a bet needs one horse per place or race; Pick bets log the first race in Race #.
+// Rows start blank apart from the racetrack, which a new row copies from the one above.
+// Horse # is a text box in Basic (one horse), and a number picker in Exotic, where a bet needs
+// one horse per place or race; Pick bets log the first race in Race #.
 function betRowHTML(prev = {}) {
   return `
     <tr>
-      <td><input type="number" name="race" min="1" max="20" required class="w-xs" value="${esc(prev.race || '')}"></td>
-      <td><input type="text" name="horse" required inputmode="numeric" placeholder="#" class="w-xs only-basic" value="${esc(prev.horse || '')}">
+      <td><input type="text" name="track" list="trackList" required autocomplete="off" placeholder="Type or pick" class="w-md" value="${esc(prev.track || '')}"></td>
+      <td><input type="number" name="race" min="1" max="20" required class="w-xs"></td>
+      <td><select name="type" required>${betTypeOptions()}</select></td>
+      <td><input type="text" name="horse" required inputmode="numeric" placeholder="#" class="w-xs only-basic">
         <button type="button" class="horse-btn only-exotic" data-picks="" disabled>—</button></td>
-      <td><select name="type" required>${betTypeOptions(prev.type)}</select></td>
-      <td><input type="number" name="stake" min="0" step="0.01" required class="w-sm" value="${esc(prev.stake ?? '')}"></td>
+      <td><input type="number" name="stake" min="0" step="0.01" required class="w-sm"></td>
       <td><select name="result" required>
         <option value="">Select…</option><option value="won">Won</option><option value="lost">Lost</option><option value="scratched">Scratched</option>
       </select></td>
@@ -678,27 +680,38 @@ function updateBetRows() {
   $('#logBetsBtn').textContent = rows.length === 1 ? 'Log bet' : `Log ${rows.length} bets`;
 }
 
-function resetBetForm(first) {
-  const f = $('#betForm');
-  f.date.value = '';
-  f.track.value = '';
-  $('#betRows').innerHTML = betRowHTML(first);
+function resetBetForm() {
+  $('#betForm').date.value = '';
+  $('#betRows').innerHTML = betRowHTML();
   updateBetRows();
 }
 
+// A new row starts at the same racetrack as the last one, so the cursor goes to its Race #
 $('#addBetRow').addEventListener('click', () => {
-  $('#betRows').insertAdjacentHTML('beforeend', betRowHTML());
+  const last = $$('#betRows [name=track]').pop();
+  $('#betRows').insertAdjacentHTML('beforeend', betRowHTML({ track: last ? last.value : '' }));
   updateBetRows();
-  $$('#betRows tr').pop().querySelector('[name=race]').focus();
+  const row = $$('#betRows tr').pop();
+  row.querySelector(row.querySelector('[name=track]').value ? '[name=race]' : '[name=track]').focus();
 });
 
-// Exotic bets take several horses ("3-5-1"), so the Horse # box hints at the format and offers a full keyboard
+// Exotic stake starts at the wager's min bet from the Risk Matrix's exotic table (your edits included).
+// It follows the bet type until you type your own amount.
+function autofillStake(tr) {
+  const stake = tr.querySelector('[name=stake]');
+  const row = exoticRows().find(r => r.name === tr.querySelector('[name=type]').value);
+  if (stake.value !== '' && stake.value !== stake.dataset.auto) return;
+  stake.value = row ? +row.min.toFixed(2) : '';
+  stake.dataset.auto = stake.value;
+}
+
 // A different bet type needs a different number of horses, so its picks and winners start over
 $('#betRows').addEventListener('change', e => {
   if (e.target.name !== 'type') return;
   const tr = e.target.closest('tr');
   tr.querySelector('.horse-btn').dataset.picks = '';
   tr.querySelector('.winners-btn').dataset.winners = '';
+  autofillStake(tr);
   syncHorse(tr);
   syncWinners(tr);
 });
@@ -756,7 +769,7 @@ $('#betForm').addEventListener('submit', e => {
     return {
       id: uid(),
       date: f.date.value,
-      track: f.track.value.trim(),
+      track: v('track').value.trim(),
       race: v('race').value,
       // Exotic picks are saved like 3-5-1, or 3/5/1 for a Pick bet
       horse: info ? picksOf(tr.querySelector('.horse-btn').dataset.picks).join(info.kind === 'vertical' ? '-' : '/') : v('horse').value.trim(),
