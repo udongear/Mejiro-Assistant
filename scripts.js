@@ -508,9 +508,6 @@ function renderTracker() {
 const BET_TYPES = [['Win', '1st'], ['Place', '1st–2nd'], ['Show', '1st–3rd'],
   ['Exacta', '1st–2nd in order'], ['Trifecta', '1st–3rd in order'], ['Superfecta', '1st–4th in order'],
   ['Super High Five', '1st–5th in order'], ['Pick 3', 'winners of 3 races'], ['Pick 5', 'winners of 5 races']];
-// What goes in "Horse #" for each kind of bet; Pick bets log the first leg's race
-const HORSE_HINTS = { Exacta: 'e.g. 3-5', Trifecta: 'e.g. 3-5-1', Superfecta: 'e.g. 3-5-1-2', 'Super High Five': 'e.g. 3-5-1-2-7',
-  'Pick 3': 'e.g. 3/5/1', 'Pick 5': 'e.g. 3/5/1/2/7' };
 
 // The Bet type list holds only the current mode's types
 const betTypeOptions = selected => '<option value="">Select…</option>' + modeBetTypes().map(([t, places]) =>
@@ -523,14 +520,17 @@ function syncBetTypes() {
     sel.innerHTML = betTypeOptions(was);
     if (sel.value !== was) sel.dispatchEvent(new Event('change', { bubbles: true }));
   });
+  $$('#betRows tr').forEach(syncHorse);
 }
 
-// Rows start blank
+// Rows start blank. Horse # is a text box in Basic (one horse), and a number picker in Exotic,
+// where a bet needs one horse per place or race; Pick bets log the first race in Race #.
 function betRowHTML(prev = {}) {
   return `
     <tr>
       <td><input type="number" name="race" min="1" max="20" required class="w-xs" value="${esc(prev.race || '')}"></td>
-      <td><input type="text" name="horse" required inputmode="numeric" placeholder="#" class="w-xs" value="${esc(prev.horse || '')}"></td>
+      <td><input type="text" name="horse" required inputmode="numeric" placeholder="#" class="w-xs only-basic" value="${esc(prev.horse || '')}">
+        <button type="button" class="horse-btn only-exotic" data-picks="" disabled>—</button></td>
       <td><select name="type" required>${betTypeOptions(prev.type)}</select></td>
       <td><input type="number" name="stake" min="0" step="0.01" required class="w-sm" value="${esc(prev.stake ?? '')}"></td>
       <td><select name="result" required>
@@ -561,14 +561,30 @@ function winnersHTML(winners, info) {
   return `<span class="xc-cloths">${winners.map(n => cloth(n)).join(`<span class="xc-sep">${info.kind === 'vertical' ? '–' : '/'}</span>`)}</span>`;
 }
 
+const picksOf = text => (text ? String(text).split(/[-/,\s]+/).filter(Boolean).map(Number) : []);
+
+// Exotic Horse #: the picker button, ready once a bet type is chosen. The hidden text box is switched off
+// so the browser doesn't ask for it.
+function syncHorse(tr) {
+  tr.querySelector('[name=horse]').disabled = isExotic();
+  const btn = tr.querySelector('.horse-btn');
+  const info = betInfo(tr.querySelector('[name=type]').value);
+  btn.disabled = !info;
+  if (!info) btn.dataset.picks = '';
+  const picks = picksOf(btn.dataset.picks);
+  if (!info || picks.length === info.legs) btn.classList.remove('invalid');
+  btn.innerHTML = winnersHTML(picks, info) || (info ? `Choose ${info.legs}…` : '—');
+  btn.title = info ? `Your ${info.legs} horses, in order` : 'Choose a bet type first';
+  if (!$('#betRows .horse-btn.invalid')) $('#betError').classList.add('hidden');
+}
+
 // The row's Actual winners button works only for a lost exotic bet; changing the type or result clears it
 function syncWinners(tr) {
   const btn = tr.querySelector('.winners-btn');
   const info = betInfo(tr.querySelector('[name=type]').value);
   btn.disabled = !info || tr.querySelector('[name=result]').value !== 'lost';
   if (btn.disabled) btn.dataset.winners = '';
-  const winners = btn.dataset.winners ? btn.dataset.winners.split(',').map(Number) : [];
-  btn.innerHTML = winnersHTML(winners, info) || (btn.disabled ? '—' : 'Pick…');
+  btn.innerHTML = winnersHTML(picksOf(btn.dataset.winners), info) || (btn.disabled ? '—' : 'Pick…');
   btn.title = btn.disabled ? 'For exotic bets you lost' : 'Pick the horses that actually finished';
 }
 
@@ -576,20 +592,21 @@ let numPicker = null;  // { anchor, close, undo } while the number picker is ope
 
 // A small popup of program numbers 1–16 in saddle-cloth colors, like an emoji picker. Each press fills
 // the next slot (1st, 2nd… or each Pick race), and it closes by itself once every slot is filled.
-// However it closes, onClose gets the numbers picked so far.
-function openNumPicker(anchor, info, current, firstRace, onClose) {
+// However it closes, onClose gets the numbers picked so far. Used for your picks and the actual winners.
+function openNumPicker(anchor, info, current, firstRace, onClose, title) {
   closeNumPicker();
   const vertical = info.kind === 'vertical';
+  title = title || (vertical ? 'Actual finish' : 'Race winners');
   let seq = (current || []).slice(0, info.legs);
   let closed = false;
   const el = document.createElement('div');
   el.className = 'num-picker';
   el.setAttribute('role', 'dialog');
-  el.setAttribute('aria-label', `Actual winners for the ${info.name}`);
+  el.setAttribute('aria-label', `${title} for the ${info.name}`);
   const slotName = i => vertical ? ['1st', '2nd', '3rd', '4th', '5th'][i] : firstRace ? `R${firstRace + i}` : `Leg ${i + 1}`;
   const draw = () => {
     el.innerHTML = `
-      <div class="np-head"><b>${vertical ? 'Actual finish' : 'Race winners'}</b><span>${esc(info.name)}</span></div>
+      <div class="np-head"><b>${esc(title)}</b><span>${esc(info.name)}</span></div>
       <div class="np-slots">${Array.from({ length: info.legs }, (_, i) => `
         <span class="np-slot ${i === seq.length ? 'next' : ''}"><small>${slotName(i)}</small>${seq[i] ? cloth(seq[i]) : '<span class="np-blank"></span>'}</span>`).join('')}</div>
       <div class="np-grid">${Array.from({ length: 16 }, (_, i) => i + 1).map(n => `
@@ -647,14 +664,15 @@ document.addEventListener('keydown', e => {
 });
 
 // The same button opens the picker, or closes it if it's already open there
-function toggleNumPicker(btn, info, current, firstRace, onClose) {
+function toggleNumPicker(btn, info, current, firstRace, onClose, title) {
   if (numPicker && numPicker.anchor === btn) return closeNumPicker();
-  openNumPicker(btn, info, current, firstRace, onClose);
+  openNumPicker(btn, info, current, firstRace, onClose, title);
 }
 
 function updateBetRows() {
   const rows = $$('#betRows tr');
   rows.forEach(syncPayout);
+  rows.forEach(syncHorse);
   rows.forEach(syncWinners);
   $$('#betRows [data-remove-row]').forEach(b => { b.disabled = rows.length === 1; });
   $('#logBetsBtn').textContent = rows.length === 1 ? 'Log bet' : `Log ${rows.length} bets`;
@@ -675,16 +693,13 @@ $('#addBetRow').addEventListener('click', () => {
 });
 
 // Exotic bets take several horses ("3-5-1"), so the Horse # box hints at the format and offers a full keyboard
+// A different bet type needs a different number of horses, so its picks and winners start over
 $('#betRows').addEventListener('change', e => {
   if (e.target.name !== 'type') return;
   const tr = e.target.closest('tr');
-  const horse = tr.querySelector('[name=horse]');
-  horse.placeholder = HORSE_HINTS[e.target.value] || '#';
-  horse.inputMode = HORSE_HINTS[e.target.value] ? 'text' : 'numeric';
-  horse.classList.toggle('w-sm', !!HORSE_HINTS[e.target.value]);
-  horse.classList.toggle('w-xs', !HORSE_HINTS[e.target.value]);
-  // A different bet type needs a different number of winners
+  tr.querySelector('.horse-btn').dataset.picks = '';
   tr.querySelector('.winners-btn').dataset.winners = '';
+  syncHorse(tr);
   syncWinners(tr);
 });
 
@@ -695,11 +710,16 @@ $('#betRows').addEventListener('change', e => {
 });
 
 $('#betRows').addEventListener('click', e => {
+  const horse = e.target.closest('.horse-btn');
+  if (horse) {
+    const tr = horse.closest('tr');
+    return toggleNumPicker(horse, betInfo(tr.querySelector('[name=type]').value), picksOf(horse.dataset.picks), num(tr.querySelector('[name=race]').value),
+      seq => { horse.dataset.picks = seq.join(','); syncHorse(tr); }, 'Your picks');
+  }
   const pick = e.target.closest('.winners-btn');
   if (pick) {
     const tr = pick.closest('tr');
-    const current = pick.dataset.winners ? pick.dataset.winners.split(',').map(Number) : [];
-    return toggleNumPicker(pick, betInfo(tr.querySelector('[name=type]').value), current, num(tr.querySelector('[name=race]').value),
+    return toggleNumPicker(pick, betInfo(tr.querySelector('[name=type]').value), picksOf(pick.dataset.winners), num(tr.querySelector('[name=race]').value),
       seq => { pick.dataset.winners = seq.join(','); syncWinners(tr); });
   }
   const btn = e.target.closest('[data-remove-row]');
@@ -711,21 +731,40 @@ $('#betRows').addEventListener('click', e => {
 $('#betForm').addEventListener('submit', e => {
   e.preventDefault();
   const f = e.target;
-  const logged = $$('#betRows tr').map(tr => {
+  const rows = $$('#betRows tr');
+
+  // An exotic bet needs every horse its type calls for: 2 for an Exacta, 5 for a Pick 5…
+  const short = rows.map((tr, i) => {
+    const info = betInfo(tr.querySelector('[name=type]').value), btn = tr.querySelector('.horse-btn');
+    const have = picksOf(btn.dataset.picks).length;
+    btn.classList.toggle('invalid', !!info && have < info.legs);
+    return info && have < info.legs
+      ? `${rows.length > 1 ? `Row ${i + 1}: ` : ''}${info.name} needs ${info.legs} horses, but ${have ? `only ${have} ${have === 1 ? 'is' : 'are'}` : 'none are'} picked.` : '';
+  }).filter(Boolean);
+  if (short.length) {
+    $('#betError').innerHTML = short.map(esc).join('<br>');
+    $('#betError').classList.remove('hidden');
+    $('#betRows .horse-btn.invalid').focus();
+    return;
+  }
+
+  const logged = rows.map(tr => {
     const v = n => tr.querySelector(`[name=${n}]`);
     const status = v('result').value;
+    const info = betInfo(v('type').value);
     const winners = tr.querySelector('.winners-btn').dataset.winners;
     return {
       id: uid(),
       date: f.date.value,
       track: f.track.value.trim(),
       race: v('race').value,
-      horse: v('horse').value.trim(),
+      // Exotic picks are saved like 3-5-1, or 3/5/1 for a Pick bet
+      horse: info ? picksOf(tr.querySelector('.horse-btn').dataset.picks).join(info.kind === 'vertical' ? '-' : '/') : v('horse').value.trim(),
       type: v('type').value,
       stake: num(v('stake').value),
       status,
       payout: status === 'won' ? num(v('payout').value) : 0,
-      ...(status === 'lost' && betInfo(v('type').value) && winners ? { winners: winners.split(',').map(Number) } : {}),
+      ...(status === 'lost' && info && winners ? { winners: picksOf(winners) } : {}),
       settledAt: new Date().toISOString(),
     };
   });
@@ -2135,12 +2174,18 @@ function renderHistory() {
     return `<td><button type="button" class="winners-btn" data-hist-winners="${b.id}"
       title="${b.winners && b.winners.length ? 'Change' : 'Add'} the horses that actually finished">${winnersHTML(b.winners, info) || '+ Add'}</button></td>`;
   };
+  // Exotic picks show as saddle cloths, to line up with the actual winners; anything else as typed
+  const horseCell = b => {
+    const info = betInfo(b.type), picks = picksOf(b.horse);
+    return info && picks.length && picks.every(n => Number.isInteger(n) && n > 0)
+      ? `<span class="pick-cloths">${winnersHTML(picks, info)}</span>` : esc(horseLabel(b.horse));
+  };
   const body = withRunning.reverse().map(({ b, running }) => {
     const p = profitOf(b);
     return `
       <tr>
         <td>${fmtDate(b.date)}</td><td>${esc(b.track)}</td><td>R${esc(b.race)}</td>
-        <td>${esc(horseLabel(b.horse))}</td><td>${esc(b.type)}</td>
+        <td>${horseCell(b)}</td><td>${esc(b.type)}</td>
         <td><span class="badge ${b.status}">${b.status === 'open' ? 'PENDING' : b.status.toUpperCase()}</span></td>
         ${winnersCell(b)}
         <td class="num">${money(num(b.stake))}</td>
