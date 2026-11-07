@@ -392,6 +392,40 @@ input[type="date"] { color-scheme: dark; }
 .xc-how summary { cursor: pointer; color: var(--lavender); font-weight: 500; }
 .xc-how ol { margin: 8px 0; padding-left: 20px; line-height: 1.5; }
 .xc-how p { margin: 0; line-height: 1.5; }
+/* Actual winners: the button in Log bets and History, and its number picker */
+.winners-btn {
+  display: inline-flex; align-items: center; min-height: 34px; padding: 4px 10px; border-radius: 9px; white-space: nowrap;
+  border: 1px dashed var(--border); background: var(--surface-2); color: var(--lavender); font: 600 13px var(--font); cursor: pointer;
+}
+.winners-btn:hover:not(:disabled) { border-color: var(--violet); }
+.winners-btn:disabled { color: var(--muted); border-style: solid; opacity: .5; cursor: default; }
+.winners-btn .xc-cloths { flex-wrap: nowrap; gap: 3px; }
+.winners-btn .cloth { min-width: 22px; height: 22px; font-size: 12px; }
+.num-picker {
+  position: fixed; z-index: 80; width: 236px; padding: 12px; border-radius: 14px;
+  background: var(--surface); border: 1px solid var(--violet); box-shadow: 0 12px 32px rgba(0, 0, 0, .6);
+}
+.np-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 10px; font-size: 13px; }
+.np-head span { color: var(--muted); font-size: 12px; }
+.np-slots { display: flex; justify-content: center; gap: 6px; margin-bottom: 12px; }
+.np-slot { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.np-slot small { color: var(--muted); font-size: 10px; font-weight: 600; }
+.np-slot .cloth, .np-blank { width: 32px; height: 32px; }
+.np-blank { border-radius: 5px; border: 1px dashed var(--border); }
+.np-slot.next .np-blank { border-color: var(--lavender); box-shadow: 0 0 0 1px var(--lavender); }
+.np-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.np-grid button { padding: 0; border: 0; border-radius: 6px; background: none; line-height: 0; cursor: pointer; }
+.np-grid .cloth { width: 100%; height: 38px; font-size: 16px; transition: transform .1s; }
+.np-grid button:hover:not(:disabled) .cloth { transform: scale(1.08); box-shadow: 0 0 0 2px var(--lavender); }
+.np-grid button:disabled { opacity: .2; cursor: default; }
+.np-actions { display: flex; gap: 6px; margin-top: 12px; }
+.np-actions button {
+  flex: 1; padding: 7px 0; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--surface-2); color: var(--text); font: 600 12px var(--font); cursor: pointer;
+}
+.np-actions button:disabled { opacity: .4; cursor: default; }
+.np-actions .np-done { background: var(--violet); border-color: var(--violet); color: #fff; }
+
 /* Saddle-cloth numbers, in the standard program colors */
 .cloth {
   display: inline-grid; place-items: center; min-width: 26px; height: 26px; padding: 0 4px; border-radius: 5px;

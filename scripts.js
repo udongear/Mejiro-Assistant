@@ -537,6 +537,7 @@ function betRowHTML(prev = {}) {
         <option value="">Select…</option><option value="won">Won</option><option value="lost">Lost</option><option value="scratched">Scratched</option>
       </select></td>
       <td><input type="number" name="payout" min="0" step="0.01" required placeholder="Incl. stake" class="w-sm"></td>
+      <td class="only-exotic"><button type="button" class="winners-btn" data-winners="" disabled>—</button></td>
       <td><button type="button" class="btn tiny-btn ghost danger" data-remove-row title="Remove this bet">✕</button></td>
     </tr>`;
 }
@@ -549,9 +550,112 @@ function syncPayout(tr) {
   if (!won) payout.value = '';
 }
 
+/* ----- Actual winners: for an exotic bet you lost, the horses that really finished
+   (or won each race, for a Pick bet), saved on the bet as program numbers in order ----- */
+
+const betInfo = type => EXOTIC_INFO.find(d => d.name === type);
+
+// Saddle cloths in order: 4–7–1 for one race, 4 / 7 / 1 for a Pick bet
+function winnersHTML(winners, info) {
+  if (!info || !winners || !winners.length) return '';
+  return `<span class="xc-cloths">${winners.map(n => cloth(n)).join(`<span class="xc-sep">${info.kind === 'vertical' ? '–' : '/'}</span>`)}</span>`;
+}
+
+// The row's Actual winners button works only for a lost exotic bet; changing the type or result clears it
+function syncWinners(tr) {
+  const btn = tr.querySelector('.winners-btn');
+  const info = betInfo(tr.querySelector('[name=type]').value);
+  btn.disabled = !info || tr.querySelector('[name=result]').value !== 'lost';
+  if (btn.disabled) btn.dataset.winners = '';
+  const winners = btn.dataset.winners ? btn.dataset.winners.split(',').map(Number) : [];
+  btn.innerHTML = winnersHTML(winners, info) || (btn.disabled ? '—' : 'Pick…');
+  btn.title = btn.disabled ? 'For exotic bets you lost' : 'Pick the horses that actually finished';
+}
+
+let numPicker = null;  // { anchor, close, undo } while the number picker is open
+
+// A small popup of program numbers 1–16 in saddle-cloth colors, like an emoji picker. Each press fills
+// the next slot (1st, 2nd… or each Pick race), and it closes by itself once every slot is filled.
+// However it closes, onClose gets the numbers picked so far.
+function openNumPicker(anchor, info, current, firstRace, onClose) {
+  closeNumPicker();
+  const vertical = info.kind === 'vertical';
+  let seq = (current || []).slice(0, info.legs);
+  let closed = false;
+  const el = document.createElement('div');
+  el.className = 'num-picker';
+  el.setAttribute('role', 'dialog');
+  el.setAttribute('aria-label', `Actual winners for the ${info.name}`);
+  const slotName = i => vertical ? ['1st', '2nd', '3rd', '4th', '5th'][i] : firstRace ? `R${firstRace + i}` : `Leg ${i + 1}`;
+  const draw = () => {
+    el.innerHTML = `
+      <div class="np-head"><b>${vertical ? 'Actual finish' : 'Race winners'}</b><span>${esc(info.name)}</span></div>
+      <div class="np-slots">${Array.from({ length: info.legs }, (_, i) => `
+        <span class="np-slot ${i === seq.length ? 'next' : ''}"><small>${slotName(i)}</small>${seq[i] ? cloth(seq[i]) : '<span class="np-blank"></span>'}</span>`).join('')}</div>
+      <div class="np-grid">${Array.from({ length: 16 }, (_, i) => i + 1).map(n => `
+        <button type="button" data-n="${n}" aria-label="Number ${n}"
+          ${seq.length >= info.legs || (vertical && seq.includes(n)) ? 'disabled' : ''}>${cloth(n)}</button>`).join('')}</div>
+      <div class="np-actions">
+        <button type="button" data-np="undo" ${seq.length ? '' : 'disabled'}>⌫ Undo</button>
+        <button type="button" data-np="clear" ${seq.length ? '' : 'disabled'}>Clear</button>
+        <button type="button" data-np="done" class="np-done">Done</button>
+      </div>`;
+  };
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    el.remove();
+    document.removeEventListener('pointerdown', outside, true);
+    window.removeEventListener('resize', close);
+    window.removeEventListener('scroll', close, true);
+    numPicker = null;
+    onClose(seq);
+  };
+  const outside = e => { if (!el.contains(e.target) && !anchor.contains(e.target)) close(); };
+  el.addEventListener('click', e => {
+    const n = e.target.closest('[data-n]'), act = e.target.closest('[data-np]');
+    if (n && !n.disabled) {
+      seq.push(+n.dataset.n);
+      draw();
+      if (seq.length === info.legs) setTimeout(close, 180);  // a moment to see the last number land
+    } else if (act) {
+      if (act.dataset.np === 'done') return close();
+      if (act.dataset.np === 'undo') seq.pop();
+      if (act.dataset.np === 'clear') seq = [];
+      draw();
+    }
+  });
+  draw();
+  document.body.appendChild(el);
+  // Under the button, or above it when there's no room below
+  const r = anchor.getBoundingClientRect(), w = el.offsetWidth, h = el.offsetHeight;
+  el.style.left = Math.max(8, Math.min(r.left, window.innerWidth - w - 8)) + 'px';
+  el.style.top = (r.bottom + 6 + h > window.innerHeight && r.top - 6 - h > 0 ? r.top - 6 - h : r.bottom + 6) + 'px';
+  document.addEventListener('pointerdown', outside, true);
+  window.addEventListener('resize', close);
+  window.addEventListener('scroll', close, true);
+  numPicker = { anchor, close, undo: () => { seq.pop(); draw(); } };
+}
+
+function closeNumPicker() { if (numPicker) numPicker.close(); }
+
+// Esc closes the picker; Backspace takes back the last number
+document.addEventListener('keydown', e => {
+  if (!numPicker) return;
+  if (e.key === 'Escape') numPicker.close();
+  else if (e.key === 'Backspace' && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)) { e.preventDefault(); numPicker.undo(); }
+});
+
+// The same button opens the picker, or closes it if it's already open there
+function toggleNumPicker(btn, info, current, firstRace, onClose) {
+  if (numPicker && numPicker.anchor === btn) return closeNumPicker();
+  openNumPicker(btn, info, current, firstRace, onClose);
+}
+
 function updateBetRows() {
   const rows = $$('#betRows tr');
   rows.forEach(syncPayout);
+  rows.forEach(syncWinners);
   $$('#betRows [data-remove-row]').forEach(b => { b.disabled = rows.length === 1; });
   $('#logBetsBtn').textContent = rows.length === 1 ? 'Log bet' : `Log ${rows.length} bets`;
 }
@@ -573,18 +677,31 @@ $('#addBetRow').addEventListener('click', () => {
 // Exotic bets take several horses ("3-5-1"), so the Horse # box hints at the format and offers a full keyboard
 $('#betRows').addEventListener('change', e => {
   if (e.target.name !== 'type') return;
-  const horse = e.target.closest('tr').querySelector('[name=horse]');
+  const tr = e.target.closest('tr');
+  const horse = tr.querySelector('[name=horse]');
   horse.placeholder = HORSE_HINTS[e.target.value] || '#';
   horse.inputMode = HORSE_HINTS[e.target.value] ? 'text' : 'numeric';
   horse.classList.toggle('w-sm', !!HORSE_HINTS[e.target.value]);
   horse.classList.toggle('w-xs', !HORSE_HINTS[e.target.value]);
+  // A different bet type needs a different number of winners
+  tr.querySelector('.winners-btn').dataset.winners = '';
+  syncWinners(tr);
 });
 
 $('#betRows').addEventListener('change', e => {
-  if (e.target.name === 'result') syncPayout(e.target.closest('tr'));
+  if (e.target.name !== 'result') return;
+  syncPayout(e.target.closest('tr'));
+  syncWinners(e.target.closest('tr'));
 });
 
 $('#betRows').addEventListener('click', e => {
+  const pick = e.target.closest('.winners-btn');
+  if (pick) {
+    const tr = pick.closest('tr');
+    const current = pick.dataset.winners ? pick.dataset.winners.split(',').map(Number) : [];
+    return toggleNumPicker(pick, betInfo(tr.querySelector('[name=type]').value), current, num(tr.querySelector('[name=race]').value),
+      seq => { pick.dataset.winners = seq.join(','); syncWinners(tr); });
+  }
   const btn = e.target.closest('[data-remove-row]');
   if (!btn || $$('#betRows tr').length === 1) return;
   btn.closest('tr').remove();
@@ -597,6 +714,7 @@ $('#betForm').addEventListener('submit', e => {
   const logged = $$('#betRows tr').map(tr => {
     const v = n => tr.querySelector(`[name=${n}]`);
     const status = v('result').value;
+    const winners = tr.querySelector('.winners-btn').dataset.winners;
     return {
       id: uid(),
       date: f.date.value,
@@ -607,6 +725,7 @@ $('#betForm').addEventListener('submit', e => {
       stake: num(v('stake').value),
       status,
       payout: status === 'won' ? num(v('payout').value) : 0,
+      ...(status === 'lost' && betInfo(v('type').value) && winners ? { winners: winners.split(',').map(Number) } : {}),
       settledAt: new Date().toISOString(),
     };
   });
@@ -2008,6 +2127,14 @@ function renderHistory() {
       <div class="sub">${decided.length ? (wins.length / decided.length * 100).toFixed(0) + '% hit rate' : '—'}</div></div>
     <div class="stat"><div class="label">Best win</div><div class="value ${plClass(best)}">${money(best, true)}</div></div>`;
 
+  // Exotic mode: what actually came in, for bets you lost (pick or change it any time)
+  const winnersCell = b => {
+    if (!isExotic()) return '';
+    const info = betInfo(b.type);
+    if (b.status !== 'lost' || !info) return '<td class="muted">—</td>';
+    return `<td><button type="button" class="winners-btn" data-hist-winners="${b.id}"
+      title="${b.winners && b.winners.length ? 'Change' : 'Add'} the horses that actually finished">${winnersHTML(b.winners, info) || '+ Add'}</button></td>`;
+  };
   const body = withRunning.reverse().map(({ b, running }) => {
     const p = profitOf(b);
     return `
@@ -2015,6 +2142,7 @@ function renderHistory() {
         <td>${fmtDate(b.date)}</td><td>${esc(b.track)}</td><td>R${esc(b.race)}</td>
         <td>${esc(horseLabel(b.horse))}</td><td>${esc(b.type)}</td>
         <td><span class="badge ${b.status}">${b.status === 'open' ? 'PENDING' : b.status.toUpperCase()}</span></td>
+        ${winnersCell(b)}
         <td class="num">${money(num(b.stake))}</td>
         <td class="num">${b.status === 'won' ? money(num(b.payout)) : '—'}</td>
         <td class="num ${plClass(p)}">${money(p, true)}</td>
@@ -2030,14 +2158,24 @@ function renderHistory() {
   }).join('');
 
   $('#histTable').innerHTML = `
-    <thead><tr><th>Date</th><th>Track</th><th>Race</th><th>Horse #</th><th>Type</th><th>Result</th>
+    <thead><tr><th>Date</th><th>Track</th><th>Race</th><th>Horse #</th><th>Type</th><th>Result</th>${isExotic() ? '<th>Actual winners</th>' : ''}
       <th class="num">Stake</th><th class="num">Return</th><th class="num">P/L</th><th class="num">Running</th><th></th></tr></thead>
-    <tbody>${body || `<tr><td colspan="11" class="empty">No ${isExotic() ? 'exotic' : 'Win / Place / Show'} bets here yet. Log one from the Tracker.</td></tr>`}</tbody>`;
+    <tbody>${body || `<tr><td colspan="${isExotic() ? 12 : 11}" class="empty">No ${isExotic() ? 'exotic' : 'Win / Place / Show'} bets here yet. Log one from the Tracker.</td></tr>`}</tbody>`;
 }
 
 ['#histTrack', '#histType', '#histResult', '#histFrom', '#histTo'].forEach(id => $(id).addEventListener('change', renderHistory));
 
 $('#histTable').addEventListener('click', async e => {
+  const pick = e.target.closest('[data-hist-winners]');
+  if (pick) {
+    const bet = state.bets.find(b => b.id === pick.dataset.histWinners);
+    return toggleNumPicker(pick, betInfo(bet.type), bet.winners, num(bet.race), seq => {
+      if (seq.join() === (bet.winners || []).join()) return;
+      if (seq.length) bet.winners = seq; else delete bet.winners;
+      save();
+      renderHistory();
+    });
+  }
   const del = e.target.closest('[data-delete]');
   if (del) {
     if (!await confirmModal('Delete bet?', 'This removes it permanently.', 'Delete', true)) return;
@@ -2070,10 +2208,14 @@ function download(name, text, type) {
 }
 
 $('#exportCsv').addEventListener('click', () => {
-  const cols = ['date', 'track', 'race', 'horse', 'type', 'stake', 'status', 'payout', 'profit'];
+  const cols = ['date', 'track', 'race', 'horse', 'type', 'stake', 'status', 'payout', 'profit', ...(isExotic() ? ['winners'] : [])];
   const cell = v => /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : v;
+  // Winners read like the Horse # column: 4-7-1, or 4/7/1 for a Pick bet
+  const value = (b, c) => c === 'profit' ? profitOf(b).toFixed(2)
+    : c === 'winners' ? (b.winners || []).join(betInfo(b.type) && betInfo(b.type).kind === 'horizontal' ? '/' : '-')
+    : b[c] ?? '';
   // This mode's bets, like the History table
-  const lines = modeBets().map(b => cols.map(c => cell(c === 'profit' ? profitOf(b).toFixed(2) : b[c] ?? '')).join(','));
+  const lines = modeBets().map(b => cols.map(c => cell(value(b, c))).join(','));
   download(`mejiro-${isExotic() ? 'exotic' : 'basic'}-bets-${today()}.csv`, [cols.join(','), ...lines].join('\n'), 'text/csv');
 });
 
