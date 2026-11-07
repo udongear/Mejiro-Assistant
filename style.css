@@ -403,6 +403,13 @@ input[type="date"] { color-scheme: dark; }
 .horse-btn .xc-cloths, .winners-btn .xc-cloths, .pick-cloths .xc-cloths { flex-wrap: nowrap; gap: 3px; }
 .horse-btn .cloth, .winners-btn .cloth, .pick-cloths .cloth { min-width: 22px; height: 22px; font-size: 12px; }
 .pick-cloths { display: inline-flex; }
+/* History accuracy: all your horses in = green, half or more = yellow */
+.accuracy { display: inline-block; min-width: 44px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--text); }
+.accuracy.full { color: var(--profit); }
+.accuracy.half { color: #FFD84D; }
+.accuracy + small { font-size: 11px; }
+/* Exotic History holds two rows of saddle cloths, so its cells sit a little closer */
+#histTable td, #histTable th { padding-left: 7px; padding-right: 7px; }
 .bet-error { margin: 10px 0 0; padding: 9px 12px; border-radius: 9px; font-size: 13px; line-height: 1.5;
   color: var(--loss); background: rgba(255, 92, 108, .08); border: 1px solid rgba(255, 92, 108, .35); }
 .num-picker {
