@@ -497,9 +497,11 @@ function renderTracker() {
   renderWinRate();
   const br = bankroll();
   const tier = currentTier(br);
-  $('#stats').innerHTML = `
+  const balance = `<div class="stat accent balance"><div class="label">Balance</div><div class="value">${money(br)}</div></div>`;
+  // Exotic stakes start at each wager's min bet, so Exotic shows only the (shared) balance
+  $('#stats').innerHTML = isExotic() ? balance : `
     <div class="stat"><div class="label">Percent Risk</div><div class="value">${tier ? tier.pct + '%' : '—'}</div></div>
-    <div class="stat accent balance"><div class="label">Balance</div><div class="value">${money(br)}</div></div>
+    ${balance}
     <div class="stat"><div class="label">Suggested stake</div><div class="value stake-value">${money(suggestedStake())}</div></div>`;
 }
 
