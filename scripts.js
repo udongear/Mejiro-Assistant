@@ -1173,12 +1173,12 @@ $('#exoticResults').addEventListener('keydown', e => {
       3rd = exactly 3rd, 4th and 5th = adjusted top-3 rate (there's no 4th/5th data). A horse's
       chance at a position = its strength ÷ the strengths of the runners not yet placed.
    4. Pick 3 / Pick 5: one winner per race, races independent, so the legs' win chances multiply.
-   Runners with fewer than 3 starts (or no record) still count against everyone, but are never
+   Runners with 3 or fewer starts (or no record) still count against everyone, but are never
    suggested; a race where they're over a third of the field is skipped. Scratches are removed.
    1 and 1A are one betting interest.
    ========================================================= */
 
-const CALC = { K: 10, minStarts: 3, maxUnknownShare: 1 / 3, results: 10 };
+const CALC = { K: 10, minStarts: 4, maxUnknownShare: 1 / 3, results: 10 };
 const PLAY_SVG = '<svg viewBox="0 0 24 24" width="22" height="22"><circle cx="12" cy="12" r="11" fill="currentColor"/><path d="M10 7.5v9l7-4.5z" fill="#0D0A14"/></svg>';
 
 // Standard saddle-cloth colors by program number: [background, number]
