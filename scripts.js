@@ -53,7 +53,7 @@ function readLocalState() {
    users/{uid}/racecards/{date}    that day's races captured from TwinSpires (state.cards holds one day)
    save() is called after every change; it writes only what differs from the last sync. */
 
-const PREF_KEYS = ['mode', 'settings', 'matrix', 'wrRange', 'hrBet', 'strategies', 'strategyCategories', 'wpsShown', 'exoticInfo', 'exoticField'];
+const PREF_KEYS = ['mode', 'settings', 'matrix', 'wrRange', 'hrBet', 'strategies', 'strategyCategories', 'racesShown', 'exoticInfo', 'exoticField', 'exoticModel'];
 
 let fb = null;  // { auth, db } once Firebase is set up
 let synced = { prefs: '', bets: new Map(), cards: '' };  // last known Firestore copy (bet id → JSON)
@@ -1005,10 +1005,26 @@ const fmtPct = v => +v.toFixed(1) + '%';
 // starts is missing when the capture couldn't read that horse's record, and 0 for a debut
 const lifeText = e => e.starts == null ? 'No record found' : e.starts ? `${e.starts}-${e.wins}-${e.places}-${e.shows}` : 'Debut';
 
-// Which of WIN / PLACE / SHOW the right column shows; SHOW alone until you change it
-const wpsShown = () => (Array.isArray(state.wpsShown) && state.wpsShown.length ? state.wpsShown : ['show']);
-const wpsToggle = () => `<div class="wps-toggle" role="group" aria-label="Rates to show">${WPS.map(([k, label]) =>
-  `<button type="button" class="seg ${wpsShown().includes(k) ? 'active' : ''}" data-wps="${k}" aria-pressed="${wpsShown().includes(k)}">${label}</button>`).join('')}</div>`;
+/* ----- Morning line (ML): the track's opening odds for each horse, read by the capture as "9/2", "8" (8-1) or "EVEN" ----- */
+
+// The odds as a number to 1: 9/2 → 4.5, 8 → 8, EVEN → 1; null if it isn't odds
+function mlOdds(s) {
+  const t = String(s ?? '').trim().toUpperCase();
+  if (/^EVE?N?$/.test(t)) return 1;
+  const m = t.match(/^(\d+(?:\.\d+)?)(?:\s*[-/]\s*(\d+(?:\.\d+)?))?$/);
+  const odds = m ? +m[1] / (m[2] ? +m[2] : 1) : NaN;
+  return odds > 0 && Number.isFinite(odds) ? odds : null;
+}
+// The chance those odds stand for: 9/2 is 2 in 11 (before the track's cut is taken out)
+const mlChance = s => { const o = mlOdds(s); return o == null ? null : 1 / (o + 1); };
+// As TwinSpires prints it: 9/2, 5/2, and whole numbers as 8-1
+const fmtML = s => mlOdds(s) == null ? '' : /^\d+(\.\d+)?$/.test(String(s).trim()) ? `${String(s).trim()}-1` : String(s).trim().toUpperCase();
+
+// Which of WIN / PLACE / SHOW / ML the right column shows; all four until you change it
+const STAT_OPTS = [...WPS, ['ml', 'ML']];
+const statsShown = () => (Array.isArray(state.racesShown) && state.racesShown.length ? state.racesShown : STAT_OPTS.map(([k]) => k));
+const statsToggle = () => `<div class="wps-toggle" role="group" aria-label="Stats to show">${STAT_OPTS.map(([k, label]) =>
+  `<button type="button" class="seg ${statsShown().includes(k) ? 'active' : ''}" data-stat="${k}" aria-pressed="${statsShown().includes(k)}">${label}</button>`).join('')}</div>`;
 
 function captureSteps(trackName, race) {
   return `<div class="capture-steps">
@@ -1053,6 +1069,7 @@ function renderRaces() {
       <span class="tile-play" aria-hidden="true">${PLAY_SVG}</span>
       <b>${esc(d.name)}</b>${starsHTML(d.stars)}<span class="tile-desc">${esc(d.short)}</span>
       <span class="kind-tag ${d.kind}">${d.kind === 'vertical' ? 'Single Race' : 'Multiple Races'}</span></button>`).join('');
+  renderModelToggle();
   if (isExotic() && tracks.length) renderExoticResults();
 
   const track = tracks.find(x => x.key === racesView.key);
@@ -1076,7 +1093,7 @@ function renderRaces() {
   const race = races[racesView.race];
   if (!race) {
     $('#racesEntrants').innerHTML = captureSteps(track.name, racesView.race);
-    $('#racesCalc').innerHTML = wpsToggle() + '<p class="muted small-text">Percentages appear once this race is captured.</p>';
+    $('#racesCalc').innerHTML = statsToggle() + '<p class="muted small-text">Stats appear once this race is captured.</p>';
     return;
   }
 
@@ -1100,14 +1117,19 @@ function renderRaces() {
   const cell = (e, p, k) => !p ? '<span class="muted">—</span>'
     : e.scratched ? `<span class="muted">${fmtPct(p[k])}</span>`
     : `<span class="${p[k] === top[k] ? 'best' : p[k] >= 50 ? 'strong' : ''}">${fmtPct(p[k])}</span>`;
-  const shown = wpsShown();
-  $('#racesCalc').innerHTML = `${wpsToggle()}
+  // ML: green = the morning-line favorite (shortest odds) among the horses still running
+  const fav = Math.min(...entrants.filter(e => !e.scratched && mlOdds(e.ml) != null).map(e => mlOdds(e.ml)));
+  const mlCell = e => mlOdds(e.ml) == null ? '<span class="muted">—</span>'
+    : `<span class="${e.scratched ? 'muted' : mlOdds(e.ml) === fav ? 'best' : ''}">${esc(fmtML(e.ml))}</span>`;
+  const shown = statsShown();
+  $('#racesCalc').innerHTML = `${statsToggle()}
     <div class="calc-list">${all.map(({ e, p }) => `
       <div class="calc-item ${e.scratched ? 'scratched' : ''}">
         <div class="calc-head"><span><span class="muted">#${esc(e.pp)}</span> <b>${esc(e.horse)}</b>${e.scratched ? ' <span class="badge scr">SCR</span>' : ''}</span>
           <span class="muted tiny">${e.starts ? lifeText(e) : lifeText(e) === 'Debut' ? 'Debut, no record' : 'No record found'}</span></div>
         ${WPS.filter(([k]) => shown.includes(k)).map(([k, label]) =>
           `<div class="calc-row"><span>${label} %</span>${cell(e, p, k)}</div>`).join('')}
+        ${shown.includes('ml') ? `<div class="calc-row"><span>ML</span>${mlCell(e)}</div>` : ''}
       </div>`).join('')}</div>`;
 }
 
@@ -1176,9 +1198,41 @@ $('#exoticResults').addEventListener('keydown', e => {
    Runners with 3 or fewer starts (or no record) still count against everyone, but are never
    suggested; a race where they're over a third of the field is skipped. Scratches are removed.
    1 and 1A are one betting interest.
+
+   ML Model (the toggle at the top of the Exotic Wagering tab) starts from the morning line instead,
+   and keeps the steps above as a smaller second opinion:
+   a. Each line becomes a win chance (9/2 = 2 in 11); a coupled entry's one line is split between
+      its horses, and the field is scaled to 100% (the line adds up to more: the track's cut).
+   b. Lower places soften the line's edge, since favorites win more often than they run 2nd or 3rd:
+      2nd uses chance^0.81 and 3rd–5th chance^0.65 (Benter's discount for the Harville formula).
+   c. Each position's strength = that × the life-stat strength from step 3 at half weight (square
+      root), so a horse that often runs 2nd gets a nudge for 2nd without outvoting the line.
+   The same starts rules apply; a race where any runner has no morning line is skipped.
    ========================================================= */
 
 const CALC = { K: 10, minStarts: 4, maxUnknownShare: 1 / 3, results: 10 };
+const ML_MODEL = { lifeWeight: 0.5, discount: [1, 0.81, 0.65, 0.65, 0.65] };
+
+// Which model the Exotic Wagering tab uses: 'life' (career records) or 'ml' (morning line + records)
+const exoticModel = () => (state.exoticModel === 'ml' ? 'ml' : 'life');
+const todayHasML = () => racesTracks(today()).some(t => Object.values(t.card.races).some(r => r.entrants.some(e => mlChance(e.ml) != null)));
+
+function renderModelToggle() {
+  $$('#exoticModel [data-model]').forEach(b => {
+    const on = b.dataset.model === exoticModel();
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-pressed', on);
+  });
+}
+
+$('#exoticModel').addEventListener('click', e => {
+  const b = e.target.closest('[data-model]');
+  if (!b || b.dataset.model === exoticModel()) return;
+  state.exoticModel = b.dataset.model;
+  save();
+  renderModelToggle();
+  renderExoticResults();
+});
 const PLAY_SVG = '<svg viewBox="0 0 24 24" width="22" height="22"><circle cx="12" cy="12" r="11" fill="currentColor"/><path d="M10 7.5v9l7-4.5z" fill="#0D0A14"/></svg>';
 
 // Standard saddle-cloth colors by program number: [background, number]
@@ -1195,15 +1249,15 @@ const cloth = num => {
 };
 
 // One race's runners with their adjusted strengths, plus why the race can't be used ('' if it can).
-// `need` is how many qualified runners the bet needs in this race.
-function raceModel(race, need) {
+// `need` is how many qualified runners the bet needs in this race; `model` is 'life' or 'ml'.
+function raceModel(race, need, model = 'life') {
   const { K, minStarts, maxUnknownShare } = CALC;
   const field = race.entrants.filter(e => !e.scratched).map(e => {
     const n = e.starts ?? 0;
     const rate = (count, prior) => ((count || 0) + K * prior) / (n + K);
     const top3 = rate((e.wins || 0) + (e.places || 0) + (e.shows || 0), 3 / 8);
     return {
-      pp: String(e.pp), horse: e.horse, starts: e.starts,
+      pp: String(e.pp), horse: e.horse, starts: e.starts, ml: mlChance(e.ml),
       key: String(e.pp).replace(/[A-Z]+$/i, '') || String(e.pp),
       ok: e.starts != null && e.starts >= minStarts,
       // Strength at each finishing position: 1st, exactly 2nd, exactly 3rd, then top 3 for 4th and 5th
@@ -1213,10 +1267,29 @@ function raceModel(race, need) {
   const total = field.reduce((s, h) => s + h.pos[0], 0);
   field.forEach(h => { h.win = h.pos[0] / total; });
   const thin = field.filter(h => !h.ok);
-  const why = !field.length ? 'no runners'
+  let why = !field.length ? 'no runners'
     : thin.length / field.length > maxUnknownShare ? `${thin.length} of ${field.length} runners have fewer than ${minStarts} starts`
     : field.length - thin.length < need ? `fewer than ${need} runners with ${minStarts}+ starts` : '';
+  if (model === 'ml' && field.length) {
+    const noLine = field.filter(h => h.ml == null).length;
+    if (noLine) why = `${noLine} of ${field.length} runners have no morning line`;
+    else blendMorningLine(field);
+  }
   return { field, thin, why, scratched: race.entrants.length - field.length };
+}
+
+// ML Model, steps a–c above: replaces each runner's position strengths and win chance
+function blendMorningLine(field) {
+  const { lifeWeight, discount } = ML_MODEL;
+  const entrySize = {};
+  field.forEach(h => { entrySize[h.key] = (entrySize[h.key] || 0) + 1; });
+  const lineTotal = field.reduce((s, h) => s + h.ml / entrySize[h.key], 0);
+  field.forEach(h => {
+    const chance = h.ml / entrySize[h.key] / lineTotal;
+    h.pos = h.pos.map((life, at) => chance ** discount[at] * life ** lifeWeight);
+  });
+  const total = field.reduce((s, h) => s + h.pos[0], 0);
+  field.forEach(h => { h.win = h.pos[0] / total; });
 }
 
 // Exacta to Super High Five: the most likely finishing orders, filling one position at a time
@@ -1284,11 +1357,11 @@ const fairOdds = p => { const o = (1 - p) / p; return (o < 10 ? +o.toFixed(1) : 
 let exoticPick = null;  // the wager whose top 10 shows under the tiles
 
 // The races a bet can use at a track: single races, or runs of consecutive races for Pick bets
-function calcOptions(track, bet) {
+function calcOptions(track, bet, model) {
   const races = track.card.races;
   const nums = Object.keys(races).map(Number).sort((a, b) => a - b);
   if (bet.kind === 'vertical') {
-    return nums.map(n => { const m = raceModel(races[n], bet.legs); return { n, label: `Race ${n}`, why: m.why, models: [m], nums: [n] }; });
+    return nums.map(n => { const m = raceModel(races[n], bet.legs, model); return { n, label: `Race ${n}`, why: m.why, models: [m], nums: [n] }; });
   }
   const last = nums[nums.length - 1];
   return nums.filter(n => n + bet.legs - 1 <= last).map(n => {
@@ -1296,7 +1369,7 @@ function calcOptions(track, bet) {
     const label = `Races ${n}–${n + bet.legs - 1}`;
     const missing = legNums.find(x => !races[x]);
     if (missing) return { n, label, why: `race ${missing} wasn't scraped` };
-    const models = legNums.map(x => raceModel(races[x], 1));
+    const models = legNums.map(x => raceModel(races[x], 1, model));
     const bad = models.findIndex(m => m.why);
     return { n, label, why: bad < 0 ? '' : `race ${legNums[bad]}: ${models[bad].why}`, models, nums: legNums };
   });
@@ -1304,11 +1377,11 @@ function calcOptions(track, bet) {
 
 // Every race (or run of races, for Pick bets) scraped today, searched for the wager's most likely tickets.
 // Each race's own top 10 holds everything it could add to the day's top 10, so those are merged.
-function dayTopCombos(bet) {
+function dayTopCombos(bet, model) {
   const tracks = racesTracks(today());
   const found = [], skipped = [];
   let searched = 0;
-  tracks.forEach(t => calcOptions(t, bet).forEach(o => {
+  tracks.forEach(t => calcOptions(t, bet, model).forEach(o => {
     if (o.why) return skipped.push({ track: t.name, label: o.label, why: o.why });
     searched++;
     const combos = bet.kind === 'horizontal' ? topHorizontal(o.models, o.nums) : topVertical(o.models[0], bet.legs);
@@ -1325,24 +1398,44 @@ function renderExoticResults() {
   });
   const box = $('#exoticResults');
   const bet = EXOTIC_INFO.find(d => d.name === exoticPick);
+  const model = exoticModel(), ml = model === 'ml';
+  // Captures from before the bookmark read morning lines have none: say how to get them
+  if (ml && !todayHasML()) {
+    box.dataset.key = '';
+    box.innerHTML = `<p class="xc-empty">Today's captures have no morning lines yet. Set up the bookmark again
+      (<b>Today's Races → Set up Mejiro Capture</b>) so it reads them, then scrape again. Or switch to the <b>Life Stat Model</b>.</p>`;
+    return;
+  }
   if (!bet) {
     box.dataset.key = '';
     box.innerHTML = `<p class="muted small-text xc-hint">Press a wager to see today's 10 most likely tickets across every scraped race.</p>`;
     return;
   }
-  // Recalculated only when the wager or today's races change, so open sections stay open
-  const key = bet.name + '|' + JSON.stringify(state.cards && state.cards.tracks);
+  // Recalculated only when the wager, the model or today's races change, so open sections stay open
+  const key = bet.name + '|' + model + '|' + JSON.stringify(state.cards && state.cards.tracks);
   if (box.dataset.key === key) return;
   box.dataset.key = key;
 
-  const { top, searched, skipped, tracks } = dayTopCombos(bet);
+  const { top, searched, skipped, tracks } = dayTopCombos(bet, model);
   const horizontal = bet.kind === 'horizontal';
+  const how = ml ? `
+          <li>Each horse's morning line becomes its win chance (9/2 is 2 in 11), scaled so the field adds up to 100%. A coupled entry's line is split between its horses.</li>
+          <li>Favorites win more often than they run 2nd or 3rd, so lower places soften the line's edge (the Benter adjustment).</li>
+          <li>Life stats are a second opinion at half weight: a horse that often runs 2nd gets a nudge for 2nd, a horse that rarely hits the board loses a little.</li>
+          <li>Pick 3 and Pick 5 multiply each race's win chances together.</li>
+          <li>Every scraped race is searched, and the 10 most likely tickets of the day are kept.</li>` : `
+          <li>Each runner's record is blended with an average horse's, as if it had 10 more ordinary starts, so a hot 2-for-4 doesn't outrank a steady 8-for-40.</li>
+          <li>Win chances are scaled so the field adds up to 100%.</li>
+          <li>2nd and 3rd use how often each horse finishes exactly 2nd or 3rd; 4th and 5th use its top-3 rate. Horses already placed are taken out at each step.</li>
+          <li>Pick 3 and Pick 5 multiply each race's win chances together.</li>
+          <li>Every scraped race is searched, and the 10 most likely tickets of the day are kept.</li>`;
   const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
   const played = new Set(state.cards.played || []);
   box.innerHTML = `
     <div class="xc-panel ${bet.kind}">
       <div class="xc-head">
-        <h3>${esc(bet.name)}: today's top 10 <span class="kind-tag ${bet.kind}">${horizontal ? 'Multiple Races' : 'Single Race'}</span></h3>
+        <h3>${esc(bet.name)}: today's top 10 <span class="kind-tag ${bet.kind}">${horizontal ? 'Multiple Races' : 'Single Race'}</span>
+          <span class="model-tag">${ml ? 'ML Model' : 'Life Stat Model'}</span></h3>
         <span class="muted small-text">Searched ${horizontal ? plural(searched, `run`) + ` of ${bet.legs} races` : plural(searched, 'race')} at ${plural(tracks, 'track')}</span>
       </div>
       ${top.length ? `
@@ -1364,7 +1457,7 @@ function renderExoticResults() {
         <p class="muted tiny xc-note">Chance of the ticket hitting, and its <b>fair odds</b>: it's only worth playing when TwinSpires' payout beats them.
           Runners with fewer than ${CALC.minStarts} starts are never suggested. Click a ticket to grey it out once you've bet it.</p>`
       : `<p class="xc-empty">No ${horizontal ? `run of ${bet.legs} races in a row` : 'race'} scraped today has enough data for a ${esc(bet.name)}.
-          ${horizontal ? `Every race in the run must be scraped, and most of its runners need ${CALC.minStarts}+ starts.` : ''}</p>`}
+          ${horizontal ? `Every race in the run must be scraped, and most of its runners need ${CALC.minStarts}+ starts${ml ? ' and a morning line' : ''}.` : ''}</p>`}
       ${skipped.length ? `
         <details class="xc-how">
           <summary>${plural(skipped.length, horizontal ? 'run' : 'race')} skipped</summary>
@@ -1372,25 +1465,22 @@ function renderExoticResults() {
         </details>` : ''}
       <details class="xc-how">
         <summary>How it's calculated</summary>
-        <ol>
-          <li>Each runner's record is blended with an average horse's, as if it had 10 more ordinary starts, so a hot 2-for-4 doesn't outrank a steady 8-for-40.</li>
-          <li>Win chances are scaled so the field adds up to 100%.</li>
-          <li>2nd and 3rd use how often each horse finishes exactly 2nd or 3rd; 4th and 5th use its top-3 rate. Horses already placed are taken out at each step.</li>
-          <li>Pick 3 and Pick 5 multiply each race's win chances together.</li>
-          <li>Every scraped race is searched, and the 10 most likely tickets of the day are kept.</li>
+        <ol>${how}
         </ol>
-        <p>Runners with fewer than ${CALC.minStarts} starts still count against everyone's chances, but are never suggested. Races where they're more than a third of the field are skipped. Career records are all it uses: morning-line odds, recent form and surface or distance records would sharpen it.</p>
+        <p>Runners with fewer than ${CALC.minStarts} starts still count against everyone's chances, but are never suggested. Races where they're more than a third of the field are skipped.
+          ${ml ? 'So is any race where a runner has no morning line. The line is set before betting opens, so it doesn\'t know about late money or track changes (scratched horses are taken out either way).'
+            : 'Career records are all it uses: switch to the ML Model to add the morning line.'}</p>
       </details>
     </div>`;
 }
 
 $('#racesCalc').addEventListener('click', e => {
-  const b = e.target.closest('[data-wps]');
+  const b = e.target.closest('[data-stat]');
   if (!b) return;
-  const shown = wpsShown();
-  const next = shown.includes(b.dataset.wps) ? shown.filter(k => k !== b.dataset.wps) : [...shown, b.dataset.wps];
+  const shown = statsShown();
+  const next = shown.includes(b.dataset.stat) ? shown.filter(k => k !== b.dataset.stat) : [...shown, b.dataset.stat];
   if (!next.length) return;  // keep at least one on
-  state.wpsShown = WPS.map(([k]) => k).filter(k => next.includes(k));
+  state.racesShown = STAT_OPTS.map(([k]) => k).filter(k => next.includes(k));
   save();
   renderRaces();
 });
@@ -1469,6 +1559,7 @@ function mergeTrack(c) {
       pp: String(e.pp || i + 1).slice(0, 4),
       horse: String(e.horse || `Horse ${i + 1}`).slice(0, 60),
       scratched: !!e.scratched,
+      ...(mlOdds(e.ml) != null ? { ml: String(e.ml).trim().slice(0, 10) } : {}),
       ...(e.found ? { starts: int(e.starts), wins: int(e.wins), places: int(e.places), shows: int(e.shows) } : {}),
     })),
   }]));
@@ -1537,14 +1628,15 @@ $('#exportCards').addEventListener('click', async () => {
     try { days = (await userDoc().collection('racecards').get()).docs.map(d => d.data()); }
     catch (err) { return toast("Couldn't load your captures: " + err.message); }
   }
-  const cols = ['date', 'track', 'race', 'pp', 'horse', 'starts', 'wins', 'places', 'shows', 'scratched', 'captured_at'];
+  // ml_odds is the morning line as odds to 1 (9/2 = 4.5): a spreadsheet would read "9/2" as a date
+  const cols = ['date', 'track', 'race', 'pp', 'horse', 'starts', 'wins', 'places', 'shows', 'ml_odds', 'scratched', 'captured_at'];
   const cell = v => /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : v;
   const rows = [];
   days.sort((a, b) => a.date.localeCompare(b.date)).forEach(day =>
     Object.values(day.tracks || {}).sort((a, b) => a.name.localeCompare(b.name)).forEach(t =>
       Object.entries(t.races || {}).sort((a, b) => a[0] - b[0]).forEach(([n, r]) =>
         r.entrants.forEach(e => rows.push([day.date, t.name, n, e.pp, e.horse, e.starts ?? '', e.wins ?? '',
-          e.places ?? '', e.shows ?? '', e.scratched ? 'yes' : '', r.capturedAt].map(cell).join(','))))));
+          e.places ?? '', e.shows ?? '', mlOdds(e.ml) ?? '', e.scratched ? 'yes' : '', r.capturedAt].map(cell).join(','))))));
   if (!rows.length) return toast('Nothing captured yet');
   download(`mejiro-race-cards-${today()}.csv`, [cols.join(','), ...rows].join('\n'), 'text/csv');
 });
@@ -1624,8 +1716,27 @@ function mejiroCapture(site) {
       const listed = tags.some(t => /^(MTO|AE)$/i.test(t));
       const scratched = tags.includes('SCR') ||
         (!listed && (/scratch/i.test(row.className) || !!row.querySelector('[class*="scratch"], [class*="Scratch"]')));
-      return { row, nameEl, horse, pp, scratched };
+      return { row, nameEl, horse, pp, scratched, ml: mlOf(row, tags) };
     }).filter(r => r.horse);
+  };
+
+  /* Morning line: TwinSpires prints it under the live odds as "M:9/2" (live odds are left alone: they change
+     until post time). Also read as "ML 9-2" or "M/L: 9/2", a label and its odds in separate pieces, or an
+     element whose class names the morning line. Kept as written: "9/2", "8" (8-1), "EVEN". */
+  const ODDS = /^(\d{1,3}(?:\.\d+)?(?:\s*[-/]\s*\d{1,3})?|EVEN|EVN|EV)$/i;
+  const LABEL = /^(?:M\s*:|M\/?L\s*:?)\s*/i;
+  const mlOf = (row, tags) => {
+    const tidy = s => s.replace(/\s+/g, '').toUpperCase();
+    for (let i = 0; i < tags.length; i++) {
+      const m = tags[i].match(LABEL);
+      if (!m) continue;
+      const rest = tags[i].slice(m[0].length);
+      if (rest && ODDS.test(rest)) return tidy(rest);
+      if (!rest && tags[i + 1] && ODDS.test(tags[i + 1])) return tidy(tags[i + 1]);
+    }
+    const el = row.querySelector('[class*="morning"], [class*="Morning"], [class*="ml-odds"], [class*="mlOdds"], [class*="ml_odds"]');
+    const text = el ? clean(el.textContent).replace(LABEL, '') : '';
+    return ODDS.test(text) ? tidy(text) : '';
   };
 
   /* A horse's LIFE row, read only from a panel that names that horse (never from another runner's row) */
@@ -1751,7 +1862,7 @@ function mejiroCapture(site) {
         press(target);
         for (let t = 0; t < (r.scratched ? 10 : 25) && !life; t++) { await sleep(150); life = lifeOf(r.horse, rows); }
       }
-      out.push(Object.assign({ pp: r.pp, horse: r.horse, scratched: r.scratched, found: !!life }, life || {}));
+      out.push(Object.assign({ pp: r.pp, horse: r.horse, scratched: r.scratched, ml: r.ml, found: !!life }, life || {}));
       await sleep(200);
     }
     return out;
@@ -1808,22 +1919,31 @@ function mejiroCapture(site) {
       const p = payload();
       if (!p) return false;
       const now = new Date(), date = new Date(now - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
-      send.href = site + '#capture=' + encodeURIComponent(JSON.stringify({ v: 3, source: 'twinspires', date, capturedAt: now.toISOString(), ...p }));
+      send.href = site + '#capture=' + encodeURIComponent(JSON.stringify({ v: 4, source: 'twinspires', date, capturedAt: now.toISOString(), ...p }));
       setTimeout(finish, 500);
     };
+  };
+
+  /* How many morning lines were read; none at all means the page shows them some other way */
+  const mlLine = all => {
+    const n = all.filter(e => e.ml).length;
+    return n ? `<div>Morning lines for ${n} of ${all.length} horses.</div>`
+      : '<div style="color:#FF5C6C">No morning lines found. Copy the page outline and paste it to Claude.</div>';
   };
 
   const doneAll = (cards, failed, over) => {
     running = false;
     const all = cards.flatMap(c => c.races.flatMap(r => r.entrants));
     const found = all.filter(e => e.found).length;
+    const noML = all.length && !all.some(e => e.ml);
     const list = cards.map(c => { const n = c.races.flatMap(r => r.entrants), f = n.filter(e => e.found).length;
       return `<b>${html(c.track)}</b>: ${c.races.length} race${c.races.length === 1 ? '' : 's'}, ${n.length} horse${n.length === 1 ? '' : 's'}` + (f < n.length ? ` <span style="color:#FF5C6C">(${n.length - f} without a record)</span>` : ''); });
-    show(`<div>Read ${found} of ${all.length} records across ${cards.length} tracks.</div>` + note(list.join('<br>')) +
+    show(`<div>Read ${found} of ${all.length} records across ${cards.length} tracks.</div>` + (all.length ? mlLine(all) : '') + note(list.join('<br>')) +
       (failed.length ? note(`<span style="color:#FF5C6C">Couldn't open: ${failed.map(html).join(', ')}</span>`) : '') +
       (over.length ? note(`Already finished for the day: ${over.map(html).join(', ')}`) : '') +
       (cards.length ? sendLink : '') + button('mc-close', 'Close') +
-      (failed.length ? note('If no track opened, copy the page outline and paste it to Claude.') + button('mc-copy', 'Copy page outline') : ''));
+      (failed.length ? note('If no track opened, copy the page outline and paste it to Claude.') : '') +
+      (failed.length || noML ? button('mc-copy', 'Copy page outline') : ''));
     box.querySelector('#mc-close').onclick = finish;
     copyButton();
     if (cards.length) wireSend(() => ({ tracks: cards }));
@@ -1836,14 +1956,16 @@ function mejiroCapture(site) {
     const single = races.length === 1;
     const list = single
       ? races[0].entrants.map(e => `#${html(e.pp)} ${html(e.horse)}${e.scratched ? ' (SCR)' : ''}: ` +
-          (e.found ? `${e.starts}-${e.wins}-${e.places}-${e.shows}` : '<span style="color:#FF5C6C">no record</span>')).join('<br>')
+          (e.found ? `${e.starts}-${e.wins}-${e.places}-${e.shows}` : '<span style="color:#FF5C6C">no record</span>') +
+          (e.ml ? ` · ML ${html(e.ml)}` : '')).join('<br>')
       : races.map(r => { const f = r.entrants.filter(e => e.found).length; return `Race ${r.race}: ${r.entrants.length} horses` +
           (f < r.entrants.length ? ` <span style="color:#FF5C6C">(${r.entrants.length - f} without a record)</span>` : ''); }).join('<br>');
-    show(`<div>Read ${found} of ${all.length} records${single ? '' : ` across ${races.length} races`}.</div>` +
+    show(`<div>Read ${found} of ${all.length} records${single ? '' : ` across ${races.length} races`}.</div>` + (all.length ? mlLine(all) : '') +
       `<label style="display:block;margin-top:10px;font-size:12px;color:#9C92BC">Track<input id="mc-track" style="${field}" value="${html(track)}"></label>` +
       (single ? `<label style="display:block;margin-top:8px;font-size:12px;color:#9C92BC">Race<input id="mc-race" type="number" min="1" max="15" style="${field}" value="${races[0].race || ''}"></label>` : '') +
       note(list) + sendLink + button('mc-close', 'Close') +
-      (found < all.length ? note('Records missing? Open one horse\'s record by hand (click its name), then copy the page outline and paste it to Claude.') + button('mc-copy', 'Copy page outline') : ''));
+      (found < all.length ? note('Records missing? Open one horse\'s record by hand (click its name), then copy the page outline and paste it to Claude.') : '') +
+      (found < all.length || (all.length && !all.some(e => e.ml)) ? button('mc-copy', 'Copy page outline') : ''));
     box.querySelector('#mc-close').onclick = finish;
     copyButton();
     wireSend(() => {

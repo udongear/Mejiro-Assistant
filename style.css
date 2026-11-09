@@ -364,6 +364,9 @@ input[type="date"] { color-scheme: dark; }
 .xc-head h3 { margin: 0; display: flex; align-items: center; gap: 8px; }
 .xc-panel.vertical .xc-head h3 { color: #4FD1E5; }
 .xc-panel.horizontal .xc-head h3 { color: #FFB3E6; }
+/* Which model built the top 10: Life Stat Model or ML Model (the toggle at the top of the tab) */
+.model-toggle .seg { padding: 7px 14px; font-size: 13px; }
+.model-tag { font: 600 11px var(--font); color: var(--lavender); background: rgba(200, 180, 255, .12); border: 1px solid rgba(200, 180, 255, .4); padding: 2px 8px; border-radius: 999px; }
 .xc-results { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .xc-row { display: grid; grid-template-columns: 26px 170px 1fr auto; align-items: center; gap: 12px; padding: 9px 12px; border-radius: 10px; background: var(--surface-2); }
 .xc-results .xc-row { cursor: pointer; transition: background .15s, opacity .15s; }

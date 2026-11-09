@@ -1,6 +1,8 @@
 > Note: this is the original design plan for the Exotic Wagering calculator. The app follows it, with two later additions:
 > runners with 3 or fewer starts (or no record) are never suggested, and a race where they're more than a third of the field is skipped;
 > and the Super High Five uses the top-3 rate for 5th as well as 4th. The app's "How it's calculated" panel is the up-to-date summary.
+> This is the "Life Stat Model". The "ML Model" (morning line first, these life stats as a half-weight second opinion)
+> is described in the comment above raceModel in scripts.js.
 
 The plan has two parts. First, turn each horse's career stats into probabilities for this specific race. Then chain those probabilities together for each bet type. I'll use your Belmont Race 6 as the example throughout.
 

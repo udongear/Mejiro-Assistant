@@ -122,7 +122,7 @@
             <div id="racesEntrants"></div>
           </div>
           <div class="card races-col">
-            <h3>Win / Place / Show %</h3>
+            <h3>Life Stats</h3>
             <div id="racesCalc"></div>
           </div>
         </div>
@@ -132,6 +132,11 @@
       <section id="tab-exotic" class="tab">
         <header class="tab-head">
           <h2>Exotic Wagering</h2>
+          <!-- Which numbers the top 10 is built from (see "ML Model" in scripts.js) -->
+          <div class="seg-group model-toggle" id="exoticModel" role="group" aria-label="Model">
+            <button type="button" class="seg" data-model="life" title="Career records only">Life Stat Model</button>
+            <button type="button" class="seg" data-model="ml" title="Morning-line odds, with career records as a second opinion">ML Model</button>
+          </div>
         </header>
         <!-- Until today's tracks are scraped there's nothing to calculate from -->
         <div class="card" id="exoticEmpty">
