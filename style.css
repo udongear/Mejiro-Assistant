@@ -487,7 +487,6 @@ input[type="date"] { color-scheme: dark; }
 
 .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; letter-spacing: .02em; }
 .badge.clean { background: rgba(79, 209, 229, .14); color: var(--cyan); }
-.badge.demo { background: rgba(200, 180, 255, .12); color: var(--lavender); border: 1px dashed var(--lavender); }
 .badge.won { background: rgba(61, 220, 132, .14); color: var(--profit); }
 .badge.lost { background: rgba(255, 92, 108, .14); color: var(--loss); }
 .badge.scratched { background: var(--surface-2); color: var(--muted); }

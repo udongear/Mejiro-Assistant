@@ -273,7 +273,7 @@ function initFirebase() {
   const cfg = window.FIREBASE_CONFIG;
   if (location.protocol === 'file:') {
     $('#legacyExport').classList.toggle('hidden', !readLocalState());
-    return showLogin('Google sign-in needs a web address. Open the published site, or use VS Code Live Server at http://localhost:5500 (see FIREBASE_SETUP.md).');
+    return showLogin('Google sign-in needs a web address. Open the published site, or use VS Code Live Server at http://localhost:5500.');
   }
   if (!window.firebase || !cfg || !cfg.apiKey) {
     return showLogin("Firebase isn't set up yet. Paste your project's config into firebase-config.js.");
@@ -518,9 +518,9 @@ const BET_TYPES = [['Win', '1st'], ['Place', '1st–2nd'], ['Show', '1st–3rd']
   ['Exacta', '1st–2nd in order'], ['Trifecta', '1st–3rd in order'], ['Superfecta', '1st–4th in order'],
   ['Super High Five', '1st–5th in order'], ['Pick 3', 'winners of 3 races'], ['Pick 5', 'winners of 5 races']];
 
-// The Bet type list holds only the current mode's types
+// The Bet type list holds only the current mode's types; exotic wagers show just their names
 const betTypeOptions = selected => '<option value="">Select…</option>' + modeBetTypes().map(([t, places]) =>
-  `<option value="${t}" ${selected === t ? 'selected' : ''}>${t} (${places})</option>`).join('');
+  `<option value="${t}" ${selected === t ? 'selected' : ''}>${t}${isExotic() ? '' : ` (${places})`}</option>`).join('');
 
 // After a mode switch, each row keeps its type if the new mode offers it, and is cleared otherwise
 function syncBetTypes() {
@@ -2199,7 +2199,7 @@ const STAR_MAX = 6;
 const starsHTML = n => `<span class="stars" title="${n} of ${STAR_MAX}" aria-label="${n} of ${STAR_MAX} stars">${'★'.repeat(n)}<span class="off">${'★'.repeat(STAR_MAX - n)}</span></span>`;
 const EXOTIC_INFO = [
   // kind: vertical = several finishers in one race; horizontal = one winner in each of several races
-  // short: the one-liner on Today's Races' Exotic Wagering tiles
+  // short: the one-liner on the Exotic Wagering tab's tiles
   { name: 'Exacta', kind: 'vertical', legs: 2, stars: 1, min: 1, payout: 30, short: '1st and 2nd, in order',
     about: 'Pick the horses that finish 1st and 2nd, in that exact order. A "box" covers both orders for twice the cost.' },
   { name: 'Trifecta', kind: 'vertical', legs: 3, stars: 2, min: 0.5, payout: 100, short: '1st, 2nd and 3rd, in order',

@@ -1,8 +1,12 @@
 rules_version = '2';
 
+// A copy of the database rules. The live ones are in the Firebase console → Firestore Database → Rules:
+// after changing this file, paste it there and click Publish.
+//
 // Each signed-in user can read and write only their own data:
-//   users/{uid}              settings, risk matrix, view preferences
-//   users/{uid}/bets/{betId} one document per bet
+//   users/{uid}                     settings, risk matrix, strategies, view preferences
+//   users/{uid}/bets/{betId}        one document per bet
+//   users/{uid}/racecards/{date}    that day's races captured from TwinSpires
 service cloud.firestore {
   match /databases/{database}/documents {
     match /users/{uid}/{document=**} {
