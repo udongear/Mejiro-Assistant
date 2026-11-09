@@ -538,17 +538,17 @@ function syncBetTypes() {
 function betRowHTML(prev = {}) {
   return `
     <tr>
-      <td><input type="text" name="track" list="trackList" required autocomplete="off" placeholder="Type or pick" class="w-md" value="${esc(prev.track || '')}"></td>
-      <td><input type="number" name="race" min="1" max="20" required class="w-xs"></td>
-      <td><select name="type" required>${betTypeOptions()}</select></td>
-      <td><button type="button" class="horse-btn" data-picks="" disabled>—</button></td>
-      <td><input type="number" name="stake" min="0" step="0.01" required class="w-sm"></td>
-      <td><select name="result" required>
+      <td data-label="Racetrack"><input type="text" name="track" list="trackList" required autocomplete="off" placeholder="Type or pick" class="w-md" value="${esc(prev.track || '')}"></td>
+      <td data-label="Race #"><input type="number" name="race" min="1" max="20" required class="w-xs"></td>
+      <td data-label="Bet type"><select name="type" required>${betTypeOptions()}</select></td>
+      <td data-label="Horse #"><button type="button" class="horse-btn" data-picks="" disabled>—</button></td>
+      <td data-label="Stake ($)"><input type="number" name="stake" min="0" step="0.01" required class="w-sm"></td>
+      <td data-label="Result"><select name="result" required>
         <option value="">Select…</option><option value="won">Won</option><option value="lost">Lost</option><option value="scratched">Scratched</option>
       </select></td>
-      <td><input type="number" name="payout" min="0" step="0.01" required placeholder="Incl. stake" class="w-sm"></td>
-      <td class="only-exotic"><button type="button" class="winners-btn" data-winners="" disabled>—</button></td>
-      <td><button type="button" class="btn tiny-btn ghost danger" data-remove-row title="Remove this bet">✕</button></td>
+      <td data-label="Total return ($)"><input type="number" name="payout" min="0" step="0.01" required placeholder="Incl. stake" class="w-sm"></td>
+      <td data-label="Actual winners" class="only-exotic"><button type="button" class="winners-btn" data-winners="" disabled>—</button></td>
+      <td class="row-remove"><button type="button" class="btn tiny-btn ghost danger" data-remove-row title="Remove this bet">✕</button></td>
     </tr>`;
 }
 
