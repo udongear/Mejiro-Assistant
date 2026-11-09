@@ -50,6 +50,7 @@
       <nav class="nav" id="nav">
         <button data-tab="tracker" class="active">Tracker</button>
         <button data-tab="races">Today's Races</button>
+        <button data-tab="exotic" class="only-exotic">Exotic Wagering</button>
         <button data-tab="strategies">Strategies</button>
         <button data-tab="matrix">Risk Matrix</button>
         <button data-tab="history">History</button>
@@ -125,11 +126,20 @@
             <div id="racesCalc"></div>
           </div>
         </div>
-        <!-- Exotic mode, once today's tracks are scraped: each tile shows the day's top 10 tickets for its wager -->
-        <div class="card exotic-card only-exotic hidden" id="exoticCard">
-          <div class="card-head">
-            <h3>Exotic Wagering</h3>
-          </div>
+      </section>
+
+      <!-- ---------- EXOTIC WAGERING (Exotic mode only) ---------- -->
+      <section id="tab-exotic" class="tab">
+        <header class="tab-head">
+          <h2>Exotic Wagering</h2>
+        </header>
+        <!-- Until today's tracks are scraped there's nothing to calculate from -->
+        <div class="card" id="exoticEmpty">
+          <p class="empty">Go scrape today's tracks in the Today's Races tab first.</p>
+          <div style="text-align:center"><button class="btn primary" type="button" data-goto="races">Go to Today's Races</button></div>
+        </div>
+        <!-- Each tile shows the day's top 10 tickets for its wager -->
+        <div class="card exotic-card hidden" id="exoticCard">
           <div class="exotic-grid" id="exoticTiles"></div>
           <div id="exoticResults"></div>
         </div>

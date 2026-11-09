@@ -335,7 +335,7 @@ input[type="date"] { color-scheme: dark; }
 @media (max-width: 640px) { .roi-track { width: 70px; } }
 
 /* Today's Races: Exotic Wagering tiles, each opening its calculator */
-.exotic-card { margin-top: 16px; }
+.exotic-card { margin-top: 0; }
 .exotic-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
 .exotic-tile {
   position: relative; display: flex; flex-direction: column; gap: 4px; padding: 14px; border-radius: 10px; text-align: left;

@@ -345,6 +345,11 @@ $('#nav').addEventListener('click', e => {
   const b = e.target.closest('button[data-tab]');
   if (b) goTab(b.dataset.tab);
 });
+// Buttons elsewhere on the page that jump to a tab
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-goto]');
+  if (b) goTab(b.dataset.goto);
+});
 
 /* ---------- Basic / Exotic mode ----------
    The toggle at the top of the sidebar switches every tab between straight bets (Win / Place / Show)
@@ -365,6 +370,8 @@ function applyMode() {
     b.classList.toggle('active', on);
     b.setAttribute('aria-pressed', on);
   });
+  // The Exotic Wagering tab exists only in Exotic mode
+  if (!isExotic() && $('#tab-exotic').classList.contains('active')) goTab('races');
 }
 
 $('#modeToggle').addEventListener('click', e => {
@@ -1037,6 +1044,7 @@ function renderRaces() {
   }).join('');
 
   $('#exoticCard').classList.toggle('hidden', !tracks.length);
+  $('#exoticEmpty').classList.toggle('hidden', !!tracks.length);
   // Easiest to hardest, by the same difficulty stars as the Risk Matrix's exotic wager table,
   // colored the same way: vertical (one race) in cyan, horizontal (several races) in pink.
   // Each shows today's 10 most likely tickets for that wager underneath (Exotic mode only).
@@ -1610,7 +1618,12 @@ function mejiroCapture(site) {
       const nums = [...row.querySelectorAll('*')].filter(el => !el.children.length && /^\d{1,2}[A-Z]?$/.test(clean(el.textContent)))
         .sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
       const pp = cloth && clean(cloth.textContent) ? clean(cloth.textContent) : nums.length ? clean(nums[0].textContent) : String(i + 1);
-      const scratched = cellTexts(row).includes('SCR') || /scratch/i.test(row.className) || !!row.querySelector('[class*="scratch"], [class*="Scratch"]');
+      /* TwinSpires draws MTO (Main Track Only) and AE (Also Eligible) in the same badge as SCR, so its
+         "scratch" class alone isn't proof: a row tagged MTO or AE counts as scratched only if it also says SCR */
+      const tags = cellTexts(row);
+      const listed = tags.some(t => /^(MTO|AE)$/i.test(t));
+      const scratched = tags.includes('SCR') ||
+        (!listed && (/scratch/i.test(row.className) || !!row.querySelector('[class*="scratch"], [class*="Scratch"]')));
       return { row, nameEl, horse, pp, scratched };
     }).filter(r => r.horse);
   };
