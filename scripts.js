@@ -2202,16 +2202,16 @@ const EXOTIC_INFO = [
   // short: the one-liner on Today's Races' Exotic Wagering tiles
   { name: 'Exacta', kind: 'vertical', legs: 2, stars: 1, min: 1, payout: 30, short: '1st and 2nd, in order',
     about: 'Pick the horses that finish 1st and 2nd, in that exact order. A "box" covers both orders for twice the cost.' },
-  { name: 'Pick 3', kind: 'horizontal', legs: 3, stars: 2, min: 0.5, payout: 40, short: 'Winners of 3 races in a row',
-    about: 'Pick the winner of 3 races in a row on one ticket, placed before the first of them. More horses per race means more combinations, and the cost multiplies.' },
-  { name: 'Trifecta', kind: 'vertical', legs: 3, stars: 3, min: 0.5, payout: 100, short: '1st, 2nd and 3rd, in order',
+  { name: 'Trifecta', kind: 'vertical', legs: 3, stars: 2, min: 0.5, payout: 100, short: '1st, 2nd and 3rd, in order',
     about: 'Pick the horses that finish 1st, 2nd and 3rd, in that exact order. Boxing 3 horses covers all 6 orders for 6× the cost.' },
-  { name: 'Superfecta', kind: 'vertical', legs: 4, stars: 4, min: 0.1, payout: 150, short: '1st through 4th, in order',
+  { name: 'Superfecta', kind: 'vertical', legs: 4, stars: 3, min: 0.1, payout: 150, short: '1st through 4th, in order',
     about: 'Pick the horses that finish 1st through 4th, in that exact order. Usually played for 10¢ with several horses boxed, since one exact order rarely hits.' },
-  { name: 'Pick 5', kind: 'horizontal', legs: 5, stars: 5, min: 0.5, payout: 1000, short: 'Winners of 5 races in a row',
-    about: 'Pick the winners of 5 races in a row on one ticket. When nobody hits all five, the pool often carries over to the next day, which is how the big payouts build.' },
-  { name: 'Super High Five', kind: 'vertical', legs: 5, stars: 6, min: 0.2, payout: 1500, short: '1st through 5th, in order',
+  { name: 'Super High Five', kind: 'vertical', legs: 5, stars: 4, min: 0.2, payout: 1500, short: '1st through 5th, in order',
     about: 'Pick the horses that finish 1st through 5th, in that exact order. Some tracks run it as a jackpot: the whole pool pays only when exactly one ticket hits, otherwise most of it carries over.' },
+  { name: 'Pick 3', kind: 'horizontal', legs: 3, stars: 5, min: 0.5, payout: 40, short: 'Winners of 3 races in a row',
+    about: 'Pick the winner of 3 races in a row on one ticket, placed before the first of them. More horses per race means more combinations, and the cost multiplies.' },
+  { name: 'Pick 5', kind: 'horizontal', legs: 5, stars: 6, min: 0.5, payout: 1000, short: 'Winners of 5 races in a row',
+    about: 'Pick the winners of 5 races in a row on one ticket. When nobody hits all five, the pool often carries over to the next day, which is how the big payouts build.' },
 ];
 const EXOTIC_COLS = [
   ['name', 'Bet name'], ['stars', 'Difficulty to land'], ['min', 'Min bet'], ['payout', 'Avg payout'], ['roi', 'ROI (payout ÷ min bet)'],
