@@ -1158,15 +1158,17 @@ $('#exoticCard').addEventListener('click', e => {
   renderExoticResults();
 });
 
-/* Double-clicking a top-10 ticket cycles its mark: none (its rank, in color) → bet (✅, tinted green)
-   → unavailable (🚫, all grey: TwinSpires isn't offering it) → none. The marks are kept with the day's
-   race cards (state.cards.played and state.cards.unavailable), so they last through reloads and start
-   fresh the next day. */
+/* Clicking a top-10 ticket cycles its mark: none (its rank) → bet (green check, tinted green)
+   → unavailable (grey no-sign, all grey: TwinSpires isn't offering it) → none. The marks are kept with
+   the day's race cards (state.cards.played and state.cards.unavailable), so they last through reloads
+   and start fresh the next day. */
 const ticketKey = (bet, r) => [bet.name, r.track, r.label, r.legs.map(l => l.num).join('-')].join('|');
+const CHECK_SVG = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const BLOCKED_SVG = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2.5"/><path d="M6 6l12 12" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>';
 const TICKET_MARKS = {
-  '': { icon: '', next: 'played', title: 'Double-click to mark that you bet this' },
-  played: { icon: '✅', next: 'unavailable', title: 'Marked as bet. Double-click to mark it unavailable' },
-  unavailable: { icon: '🚫', next: '', title: 'Marked unavailable. Double-click to clear' },
+  '': { icon: '', next: 'played', title: 'Click to mark that you bet this' },
+  played: { icon: CHECK_SVG, next: 'unavailable', title: 'Marked as bet. Click to mark it unavailable' },
+  unavailable: { icon: BLOCKED_SVG, next: '', title: 'Marked unavailable. Click to clear' },
 };
 const ticketMark = key => (state.cards.played || []).includes(key) ? 'played'
   : (state.cards.unavailable || []).includes(key) ? 'unavailable' : '';
@@ -1182,17 +1184,12 @@ function cycleTicket(row) {
   row.classList.toggle('played', mark === 'played');
   row.classList.toggle('unavailable', mark === 'unavailable');
   row.title = TICKET_MARKS[mark].title;
-  row.querySelector('.xc-rank').textContent = TICKET_MARKS[mark].icon || [...row.parentElement.children].indexOf(row) + 1;
+  row.querySelector('.xc-rank').innerHTML = TICKET_MARKS[mark].icon || [...row.parentElement.children].indexOf(row) + 1;
 }
 
-// Two clicks (or taps: not every phone sends a dblclick) on the same ticket within 400 ms
-let lastTap = { row: null, at: 0 };
 $('#exoticResults').addEventListener('click', e => {
   const row = e.target.closest('[data-ticket]');
-  if (!row) return;
-  const now = Date.now();
-  if (row === lastTap.row && now - lastTap.at < 400) { lastTap = { row: null, at: 0 }; cycleTicket(row); }
-  else lastTap = { row, at: now };
+  if (row) cycleTicket(row);
 });
 $('#exoticResults').addEventListener('keydown', e => {
   const row = e.target.closest('[data-ticket]');
@@ -1474,7 +1471,7 @@ function renderExoticResults() {
         }).join('')}</ol>
         <p class="muted tiny xc-note">Chance of the ticket hitting, and its <b>fair odds</b>: it's only worth playing when TwinSpires' payout beats them.
           Runners with fewer than ${CALC.minStarts} starts are never suggested.
-          Double-click a ticket to mark it: once for bet ✅, again for unavailable 🚫, a third time to clear it.</p>`
+          Click a ticket to mark it: once for bet, again for unavailable, a third time to clear it.</p>`
       : `<p class="xc-empty">No ${horizontal ? `run of ${bet.legs} races in a row` : 'race'} scraped today has enough data for a ${esc(bet.name)}.
           ${horizontal ? `Every race in the run must be scraped, and most of its runners need ${CALC.minStarts}+ starts${ml ? ' and a morning line' : ''}.` : ''}</p>`}
       ${skipped.length ? `

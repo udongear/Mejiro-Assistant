@@ -369,20 +369,20 @@ input[type="date"] { color-scheme: dark; }
 .model-tag { font: 600 11px var(--font); color: var(--lavender); background: rgba(200, 180, 255, .12); border: 1px solid rgba(200, 180, 255, .4); padding: 2px 8px; border-radius: 999px; }
 .xc-results { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .xc-row { display: grid; grid-template-columns: 26px 170px 1fr auto; align-items: center; gap: 12px; padding: 9px 12px; border-radius: 10px; background: var(--surface-2); }
-/* Double-clicked, so no text selection, and no double-tap zoom on phones */
+/* Clicked to mark, so no text selection, and no tap delay on phones */
 .xc-results .xc-row { cursor: pointer; user-select: none; -webkit-user-select: none; touch-action: manipulation; transition: background .15s, opacity .15s; }
 .xc-results .xc-row:hover { background: #1C1628; }
 .xc-results .xc-row:focus-visible { outline: 2px solid var(--violet); outline-offset: 2px; }
-/* Marked as bet (✅): tinted green, everything else without its color */
+.xc-rank svg { display: block; margin: 0 auto; }
+/* Marked as bet: green check, tinted green, colors kept */
 .xc-results .xc-row.played { background: rgba(61, 220, 132, .10); box-shadow: inset 0 0 0 1px rgba(61, 220, 132, .45); }
 .xc-results .xc-row.played:hover { background: rgba(61, 220, 132, .15); }
-.xc-row.played .cloth, .xc-row.unavailable .cloth { filter: grayscale(1); }
-.xc-row.played .xc-odds span { color: var(--muted); }
-/* Marked unavailable (🚫): all grey */
+.xc-row.played .xc-rank { color: var(--profit); }
+/* Marked unavailable: grey no-sign, all grey */
 .xc-results .xc-row.unavailable { background: #121016; box-shadow: none; opacity: .45; }
 .xc-results .xc-row.unavailable:hover { background: #17141c; opacity: .65; }
-.xc-row.unavailable .xc-where b, .xc-row.unavailable .xc-odds b, .xc-row.unavailable .xc-odds span { color: var(--muted); }
-.xc-row.played .xc-rank, .xc-row.unavailable .xc-rank { font-size: 15px; }
+.xc-row.unavailable .cloth { filter: grayscale(1); }
+.xc-row.unavailable .xc-rank, .xc-row.unavailable .xc-where b, .xc-row.unavailable .xc-odds b, .xc-row.unavailable .xc-odds span { color: var(--muted); }
 .xc-where { display: flex; flex-direction: column; min-width: 0; font-size: 13px; }
 .xc-where b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .xc-where span { color: var(--muted); font-size: 12px; }
