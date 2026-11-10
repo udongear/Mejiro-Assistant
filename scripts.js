@@ -1197,7 +1197,8 @@ $('#exoticResults').addEventListener('keydown', e => {
    4. Pick 3 / Pick 5: one winner per race, races independent, so the legs' win chances multiply.
    Runners with 3 or fewer starts (or no record) still count against everyone, but are never
    suggested; a race where they're over a third of the field is skipped. Scratches are removed.
-   1 and 1A are one betting interest.
+   1 and 1A are one betting interest. A one-race wager is skipped unless the field (after scratches) is
+   bigger than its places, as TwinSpires doesn't offer it otherwise: Superfecta needs 5+, Super High Five 6+.
 
    ML Model (the toggle at the top of the Exotic Wagering tab) starts from the morning line instead,
    and keeps the steps above as a smaller second opinion:
@@ -1267,13 +1268,17 @@ function raceModel(race, need, model = 'life') {
   const total = field.reduce((s, h) => s + h.pos[0], 0);
   field.forEach(h => { h.win = h.pos[0] / total; });
   const thin = field.filter(h => !h.ok);
+  // TwinSpires only offers a one-race wager when the field is bigger than the places it covers: no
+  // Superfecta with 4 runners, no Super High Five with 5. A coupled entry (1 and 1A) counts once.
+  const interests = new Set(field.map(h => h.key)).size;
   let why = !field.length ? 'no runners'
+    : need > 1 && interests <= need ? `only ${interests} runners (needs ${need + 1} or more to be offered)`
     : thin.length / field.length > maxUnknownShare ? `${thin.length} of ${field.length} runners have fewer than ${minStarts} starts`
     : field.length - thin.length < need ? `fewer than ${need} runners with ${minStarts}+ starts` : '';
   if (model === 'ml' && field.length) {
     const noLine = field.filter(h => h.ml == null).length;
-    if (noLine) why = `${noLine} of ${field.length} runners have no morning line`;
-    else blendMorningLine(field);
+    if (noLine && !why) why = `${noLine} of ${field.length} runners have no morning line`;
+    else if (!noLine) blendMorningLine(field);
   }
   return { field, thin, why, scratched: race.entrants.length - field.length };
 }
@@ -1468,6 +1473,7 @@ function renderExoticResults() {
         <ol>${how}
         </ol>
         <p>Runners with fewer than ${CALC.minStarts} starts still count against everyone's chances, but are never suggested. Races where they're more than a third of the field are skipped.
+          ${horizontal ? '' : `So are races with ${bet.legs} or fewer runners left, since TwinSpires only offers a ${esc(bet.name)} when the field is bigger than that.`}
           ${ml ? 'So is any race where a runner has no morning line. The line is set before betting opens, so it doesn\'t know about late money or track changes (scratched horses are taken out either way).'
             : 'Career records are all it uses: switch to the ML Model to add the morning line.'}</p>
       </details>
