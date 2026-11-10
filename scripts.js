@@ -1158,30 +1158,45 @@ $('#exoticCard').addEventListener('click', e => {
   renderExoticResults();
 });
 
-/* A top-10 ticket you've bet on can be greyed out. The marks are kept with the day's race cards
-   (state.cards.played), so they last through reloads and start fresh the next day. */
+/* Double-clicking a top-10 ticket cycles its mark: none (its rank, in color) → bet (✅, tinted green)
+   → unavailable (🚫, all grey: TwinSpires isn't offering it) → none. The marks are kept with the day's
+   race cards (state.cards.played and state.cards.unavailable), so they last through reloads and start
+   fresh the next day. */
 const ticketKey = (bet, r) => [bet.name, r.track, r.label, r.legs.map(l => l.num).join('-')].join('|');
+const TICKET_MARKS = {
+  '': { icon: '', next: 'played', title: 'Double-click to mark that you bet this' },
+  played: { icon: '✅', next: 'unavailable', title: 'Marked as bet. Double-click to mark it unavailable' },
+  unavailable: { icon: '🚫', next: '', title: 'Marked unavailable. Double-click to clear' },
+};
+const ticketMark = key => (state.cards.played || []).includes(key) ? 'played'
+  : (state.cards.unavailable || []).includes(key) ? 'unavailable' : '';
 
-function togglePlayed(row) {
-  const played = new Set(state.cards.played || []);
-  const on = !played.has(row.dataset.ticket);
-  if (on) played.add(row.dataset.ticket); else played.delete(row.dataset.ticket);
-  state.cards.played = [...played];
+function cycleTicket(row) {
+  const key = row.dataset.ticket;
+  const mark = TICKET_MARKS[ticketMark(key)].next;
+  state.cards.played = (state.cards.played || []).filter(k => k !== key);
+  state.cards.unavailable = (state.cards.unavailable || []).filter(k => k !== key);
+  if (mark) state.cards[mark].push(key);
   save();
   // Changed in place: the list isn't recalculated for a mark
-  row.classList.toggle('played', on);
-  row.setAttribute('aria-pressed', on);
-  row.title = on ? 'Marked as bet. Click to unmark' : 'Click to mark that you bet this';
-  row.querySelector('.xc-rank').textContent = on ? '✓' : [...row.parentElement.children].indexOf(row) + 1;
+  row.classList.toggle('played', mark === 'played');
+  row.classList.toggle('unavailable', mark === 'unavailable');
+  row.title = TICKET_MARKS[mark].title;
+  row.querySelector('.xc-rank').textContent = TICKET_MARKS[mark].icon || [...row.parentElement.children].indexOf(row) + 1;
 }
 
+// Two clicks (or taps: not every phone sends a dblclick) on the same ticket within 400 ms
+let lastTap = { row: null, at: 0 };
 $('#exoticResults').addEventListener('click', e => {
   const row = e.target.closest('[data-ticket]');
-  if (row) togglePlayed(row);
+  if (!row) return;
+  const now = Date.now();
+  if (row === lastTap.row && now - lastTap.at < 400) { lastTap = { row: null, at: 0 }; cycleTicket(row); }
+  else lastTap = { row, at: now };
 });
 $('#exoticResults').addEventListener('keydown', e => {
   const row = e.target.closest('[data-ticket]');
-  if (row && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); togglePlayed(row); }
+  if (row && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); cycleTicket(row); }
 });
 
 /* =========================================================
@@ -1435,7 +1450,6 @@ function renderExoticResults() {
           <li>Pick 3 and Pick 5 multiply each race's win chances together.</li>
           <li>Every scraped race is searched, and the 10 most likely tickets of the day are kept.</li>`;
   const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
-  const played = new Set(state.cards.played || []);
   box.innerHTML = `
     <div class="xc-panel ${bet.kind}">
       <div class="xc-head">
@@ -1445,11 +1459,10 @@ function renderExoticResults() {
       </div>
       ${top.length ? `
         <ol class="xc-results">${top.map((r, i) => {
-          const ticket = ticketKey(bet, r), on = played.has(ticket);
+          const ticket = ticketKey(bet, r), mark = ticketMark(ticket);
           return `
-          <li class="xc-row ${on ? 'played' : ''}" data-ticket="${esc(ticket)}" role="button" tabindex="0" aria-pressed="${on}"
-            title="${on ? 'Marked as bet. Click to unmark' : 'Click to mark that you bet this'}">
-            <span class="xc-rank">${on ? '✓' : i + 1}</span>
+          <li class="xc-row ${mark}" data-ticket="${esc(ticket)}" role="button" tabindex="0" title="${TICKET_MARKS[mark].title}">
+            <span class="xc-rank">${TICKET_MARKS[mark].icon || i + 1}</span>
             <div class="xc-where"><b>${esc(r.track)}</b><span>${esc(r.label)}</span></div>
             <div class="xc-combo">
               <div class="xc-cloths">${r.legs.map(l => horizontal
@@ -1460,7 +1473,8 @@ function renderExoticResults() {
           </li>`;
         }).join('')}</ol>
         <p class="muted tiny xc-note">Chance of the ticket hitting, and its <b>fair odds</b>: it's only worth playing when TwinSpires' payout beats them.
-          Runners with fewer than ${CALC.minStarts} starts are never suggested. Click a ticket to grey it out once you've bet it.</p>`
+          Runners with fewer than ${CALC.minStarts} starts are never suggested.
+          Double-click a ticket to mark it: once for bet ✅, again for unavailable 🚫, a third time to clear it.</p>`
       : `<p class="xc-empty">No ${horizontal ? `run of ${bet.legs} races in a row` : 'race'} scraped today has enough data for a ${esc(bet.name)}.
           ${horizontal ? `Every race in the run must be scraped, and most of its runners need ${CALC.minStarts}+ starts${ml ? ' and a morning line' : ''}.` : ''}</p>`}
       ${skipped.length ? `
