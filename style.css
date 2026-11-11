@@ -103,21 +103,6 @@ a { color: var(--cyan); }
 .nav button:hover { color: var(--text); background: var(--surface-2); }
 .nav button.active { color: var(--black); background: var(--lavender); }
 
-/* Basic / Exotic mode: the toggle, and parts of the page that belong to one mode */
-.mode-toggle {
-  display: grid; grid-template-columns: 1fr 1fr; gap: 2px; padding: 3px; margin-top: -8px;
-  background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px;
-}
-.mode-toggle button {
-  border: 0; border-radius: 7px; padding: 8px 0; background: none; color: var(--muted); cursor: pointer;
-  font: 700 11px var(--font); letter-spacing: .1em; text-transform: uppercase;
-}
-.mode-toggle button:hover { color: var(--text); }
-.mode-toggle button.active { background: var(--lavender); color: var(--black); }
-.mode-toggle button[data-mode="exotic"].active { background: #FFB3E6; }
-body.mode-basic .only-exotic, body.mode-exotic .only-basic { display: none !important; }
-.intro { margin: -6px 0 16px; max-width: 860px; color: var(--muted); font-size: 14px; line-height: 1.6; }
-.intro b { color: var(--text); font-weight: 600; }
 .user-chip { margin-top: auto; display: flex; align-items: center; gap: 10px; padding: 8px 6px; font-size: 13px; min-width: 0; }
 .user-chip .av { width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0; display: grid; place-items: center; background: var(--violet); font-weight: 600; overflow: hidden; }
 .user-chip .av img { width: 100%; height: 100%; object-fit: cover; }
@@ -139,6 +124,14 @@ body.mode-basic .only-exotic, body.mode-exotic .only-basic { display: none !impo
 .stat .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
 .stat .value { font: 600 24px/1.3 var(--display); margin-top: 4px; font-variant-numeric: tabular-nums; }
 .stat .sub { color: var(--muted); font-size: 12px; }
+/* The Tracker's Percent Risk, Balance and Suggested stake: one row of three at every width */
+.stats.trio { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 640px) {
+  .stats.trio { gap: 6px; }
+  .stats.trio .stat { padding: 10px 8px; text-align: center; }
+  .stats.trio .label { font-size: 10px; letter-spacing: .03em; }
+  .stats.trio .value { font-size: 17px; overflow-wrap: anywhere; }
+}
 .stat.accent { border-color: var(--violet); background: linear-gradient(160deg, rgba(123, 97, 255, .18), var(--surface) 70%); }
 
 /* ---------- Forms ---------- */
@@ -183,6 +176,8 @@ input[type="date"] { color-scheme: dark; }
 /* Tracker: win rate */
 .winrate-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
 .winrate-head h3 { margin: 0; color: var(--muted); font-size: 12px; font-weight: 500; text-transform: uppercase; letter-spacing: .06em; }
+/* All Time, WPS and the exotic wagers: three groups of buttons side by side, wrapping on small screens */
+.rate-groups { display: flex; flex-wrap: wrap; gap: 8px; }
 .winrate-value { font: 700 56px/1.1 var(--display); color: var(--lavender); margin: 10px 0 12px; font-variant-numeric: tabular-nums; }
 .winrate-bar { height: 8px; border-radius: 999px; background: rgba(255, 92, 108, .25); overflow: hidden; margin-bottom: 10px; }
 .winrate-bar span { display: block; height: 100%; border-radius: 999px; background: var(--profit); }
@@ -247,38 +242,7 @@ input[type="date"] { color-scheme: dark; }
   .races-layout { grid-template-columns: 1fr; }
 }
 
-/* Strategies */
-.strategy-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
-.strategy { display: flex; align-items: flex-start; gap: 8px; padding: 8px; border-radius: 10px; background: var(--surface-2); border: 1px solid transparent; }
-.strategy.dragging { border-color: var(--violet); box-shadow: 0 8px 24px rgba(0, 0, 0, .5); opacity: .9; }
-.strategy textarea {
-  flex: 1; min-width: 0; resize: vertical; min-height: 0;
-  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
-  color: var(--text); font: 14px/1.5 var(--font); padding: 6px 10px;
-}
-.strategy textarea:focus { outline: 2px solid var(--violet); border-color: transparent; }
-.drag-handle {
-  flex-shrink: 0; width: 32px; height: 32px; margin-top: 4px; border: 0; border-radius: 8px;
-  background: none; color: var(--muted); font-size: 16px; cursor: grab; touch-action: none;
-}
-.drag-handle:hover { color: var(--lavender); background: var(--surface); }
-.strategy.dragging .drag-handle { cursor: grabbing; }
-.strategy .btn { margin-top: 6px; }
-.strategy-group .card-head { margin-bottom: 12px; }
-.strategy-group .card-head h3 .small-text { font-weight: 400; margin-left: 4px; }
-.strategy-list .empty { color: var(--muted); font-size: 13px; padding: 4px 2px; }
-.strategy-side { display: flex; align-items: flex-start; gap: 6px; }
-.strategy-cat { width: 150px; padding: 6px 8px; font-size: 13px; margin-top: 4px; }
-.cat-list { list-style: none; margin: 12px 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
-.cat-list li { display: flex; align-items: center; gap: 8px; }
-.cat-list .empty { color: var(--muted); font-size: 13px; }
-@media (max-width: 640px) {
-  .strategy { flex-wrap: wrap; }
-  .strategy textarea { flex-basis: calc(100% - 40px); }
-  .strategy-side { width: 100%; justify-content: flex-end; }
-}
-
-/* Risk Matrix: exotic wagers at a glance */
+/* Exotic wagers at a glance (Exotic Wagering → More Info) */
 .sort-btn {
   display: inline-flex; align-items: center; gap: 5px; padding: 0; border: 0; background: none;
   color: inherit; font: inherit; cursor: pointer;
@@ -435,7 +399,6 @@ input[type="date"] { color-scheme: dark; }
 #histTable td, #histTable th { padding-left: 7px; padding-right: 7px; }
 .import-note { margin: 10px 0 0; padding: 9px 12px; border-radius: 9px; font-size: 13px; line-height: 1.6;
   color: var(--text); background: rgba(123, 97, 255, .08); border: 1px solid rgba(123, 97, 255, .35); }
-.row-date { display: block; margin-top: 3px; color: #FFD84D; font-size: 11px; font-weight: 600; }
 .bet-error { margin: 10px 0 0; padding: 9px 12px; border-radius: 9px; font-size: 13px; line-height: 1.5;
   color: var(--loss); background: rgba(255, 92, 108, .08); border: 1px solid rgba(255, 92, 108, .35); }
 .num-picker {
@@ -470,24 +433,23 @@ input[type="date"] { color-scheme: dark; }
 }
 
 /* Tracker: log bets */
-.bet-shared { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
-.bet-shared label { width: 220px; max-width: 100%; }
 .table.bet-rows td { padding: 6px 4px; }
 .table.bet-rows th { padding: 8px 4px; }
 .bet-rows select { width: auto; }
 .table input.w-xs { width: 72px; }
 .table input.w-sm { width: 110px; }
 .table input.w-md { width: 190px; }
-/* Log bets has up to nine columns in Exotic, so its boxes run a little narrower */
-.bet-rows input.w-md { width: 150px; }
-.bet-rows input.w-sm { width: 92px; }
-.bet-rows select[name="type"] { max-width: 230px; }
-.bet-rows input[name="payout"] { width: 104px; }
+/* Log bets has ten columns, so its boxes run a little narrower */
+.bet-rows input.w-md { width: 140px; }
+.bet-rows input[name="date"] { width: 132px; }
+.bet-rows input.w-sm { width: 88px; }
+.bet-rows select[name="type"] { max-width: 180px; }
+.bet-rows input[name="payout"] { width: 96px; }
 .table input:disabled { opacity: .35; }
 /* When the card is too narrow for one line per bet (small screen or window), each bet becomes
    its own block of labelled fields that wraps to fit, instead of a row you scroll sideways */
 #betForm { container-type: inline-size; }
-@container (max-width: 980px) {
+@container (max-width: 1060px) {
   .bet-rows thead { display: none; }
   .bet-rows, .bet-rows tbody { display: block; }
   .bet-rows tr {
@@ -546,6 +508,9 @@ input[type="date"] { color-scheme: dark; }
 .modal-card { width: 100%; max-width: 460px; max-height: 90vh; overflow: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 22px; }
 .modal-card.bare { background: none; border: 0; padding: 0; }
 .modal-card.wide { max-width: 640px; }
+/* A confirmation (like Reset's) opens above the More Info popup */
+#modal { z-index: 55; }
+#exoticInfoModal .modal-card { max-width: 1000px; }
 .card-head-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .tier-table input { width: 130px; padding: 7px 9px; }
 .tier-table td { padding: 6px 8px; }
@@ -571,8 +536,6 @@ input[type="date"] { color-scheme: dark; }
     border-right: 0; border-bottom: 1px solid var(--border);
   }
   .brand-name.small, .user-chip { display: none; }
-  .mode-toggle { flex-shrink: 0; margin-top: 0; width: 132px; }
-  .mode-toggle button { padding: 7px 0; }
   .nav { flex-direction: row; overflow-x: auto; scrollbar-width: none; min-width: 0; }
   .nav button { white-space: nowrap; padding: 8px 10px; }
   .main { padding: 20px 16px 60px; }
@@ -620,3 +583,10 @@ input[type="date"] { color-scheme: dark; }
   .cal-pl { font-size: 10px; }
   .cal-bal { font-size: 13px; }
 }
+
+/* Exotic Wagering: the title with its More Info button */
+.head-title { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.head-title h2 { margin: 0; }
+/* Settings: the Risk Matrix's explanation */
+.matrix-intro { margin: 0 0 12px; max-width: 860px; line-height: 1.6; }
+.matrix-intro b { color: var(--text); }

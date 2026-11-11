@@ -42,17 +42,10 @@
         <div class="brand-mark">M</div>
         <span class="brand-name small">Mejiro</span>
       </div>
-      <!-- Switches every tab between straight bets and exotic wagers (see "Basic / Exotic mode" in scripts.js) -->
-      <div class="mode-toggle" id="modeToggle" role="group" aria-label="Wagering mode">
-        <button type="button" data-mode="basic" title="Win, Place and Show">Basic</button>
-        <button type="button" data-mode="exotic" title="Exactas, Trifectas, Pick 3s and more">Exotic</button>
-      </div>
       <nav class="nav" id="nav">
         <button data-tab="tracker" class="active">Tracker</button>
         <button data-tab="races">Today's Races</button>
-        <button data-tab="exotic" class="only-exotic">Exotic Wagering</button>
-        <button data-tab="strategies">Strategies</button>
-        <button data-tab="matrix">Risk Matrix</button>
+        <button data-tab="exotic">Exotic Wagering</button>
         <button data-tab="history">Earnings</button>
         <button data-tab="settings">Settings</button>
       </nav>
@@ -69,7 +62,8 @@
 
         <div class="card winrate" id="winRate"></div>
 
-        <div class="stats" id="stats"></div>
+        <!-- Percent Risk, Balance, Suggested stake: always one row of three, phones included -->
+        <div class="stats trio" id="stats"></div>
 
         <div class="card">
           <div class="card-head">
@@ -77,16 +71,13 @@
             <label class="btn tiny-btn file-btn" title="TwinSpires: My Account → History → Export (.csv)">Import TwinSpires CSV<input type="file" id="importCsv" accept=".csv,text/csv" hidden></label>
           </div>
           <form id="betForm">
-            <div class="bet-shared">
-              <label>Date<input type="date" name="date" required></label>
-            </div>
             <!-- Every row's Racetrack box suggests today's scraped tracks and ones you've bet on -->
             <datalist id="trackList"></datalist>
             <div class="table-wrap">
               <table class="table bet-rows">
                 <thead><tr>
-                  <th>Racetrack</th><th>Race #</th><th>Bet type</th><th>Horse #</th><th>Stake ($)</th><th>Result</th>
-                  <th>Total return ($)</th><th class="only-exotic" title="For a loss: the horses that actually finished">Actual winners</th><th></th>
+                  <th>Date</th><th>Racetrack</th><th>Race #</th><th>Bet type</th><th>Horse #</th><th>Stake ($)</th><th>Result</th>
+                  <th>Total return ($)</th><th title="For a lost exotic bet: the horses that actually finished">Actual winners</th><th></th>
                 </tr></thead>
                 <tbody id="betRows"></tbody>
               </table>
@@ -128,10 +119,13 @@
         </div>
       </section>
 
-      <!-- ---------- EXOTIC WAGERING (Exotic mode only) ---------- -->
+      <!-- ---------- EXOTIC WAGERING ---------- -->
       <section id="tab-exotic" class="tab">
         <header class="tab-head">
-          <h2>Exotic Wagering</h2>
+          <div class="head-title">
+            <h2>Exotic Wagering</h2>
+            <button class="btn tiny-btn ghost" id="exoticMoreInfo" type="button">More Info</button>
+          </div>
           <div class="exotic-controls">
             <!-- Which numbers the top 10 is built from (see "ML Model" in scripts.js) -->
             <div class="seg-group model-toggle" id="exoticModel" role="group" aria-label="Model">
@@ -155,70 +149,6 @@
         <div class="card exotic-card hidden" id="exoticCard">
           <div class="exotic-grid" id="exoticTiles"></div>
           <div id="exoticResults"></div>
-        </div>
-      </section>
-
-      <!-- ---------- STRATEGIES ---------- -->
-      <section id="tab-strategies" class="tab">
-        <header class="tab-head">
-          <h2>Strategies</h2>
-          <div class="head-actions">
-            <button class="btn ghost only-exotic" id="editCategories" type="button">Edit categories</button>
-            <button class="btn primary" id="addStrategy" type="button">+ Add strategy</button>
-          </div>
-        </header>
-        <p class="intro only-basic">Your playbook for <b>Win, Place and Show</b> bets: how you pick a horse, which numbers you trust, when to sit a race out.
-          Keep each note short so you can check it at the track. Exotic strategies live in Exotic mode.</p>
-        <p class="intro only-exotic">Your playbook for <b>exotic wagers</b>: how you build Exacta, Trifecta, Superfecta, Super High Five and Pick tickets, such as who to key, when to box, and which races to spread in.
-          Use <b>Edit categories</b> to group notes by wager or approach. Win / Place / Show notes live in Basic mode.</p>
-        <div id="strategyGroups"></div>
-      </section>
-
-      <!-- ---------- RISK MATRIX ---------- -->
-      <section id="tab-matrix" class="tab">
-        <header class="tab-head">
-          <h2>Risk Matrix</h2>
-        </header>
-        <p class="intro only-basic">The Risk Matrix decides <b>how much of your bankroll to stake on each bet</b>. Each tier starts at a bankroll size and sets a risk %,
-          and your suggested stake on the Tracker is your balance × that %. A small bankroll bets a big share so it can grow; as it grows the % drops,
-          so one bad day can't wipe out what you've built. Use <b>Edit tiers</b> to make it more or less aggressive.</p>
-        <div class="card only-basic">
-          <div class="card-head">
-            <h3>Portfolio size → Risk %</h3>
-            <div class="card-head-right">
-              <span class="muted small-text" id="matrixCurrent"></span>
-              <button class="btn tiny-btn" id="editTiers" type="button">Edit tiers</button>
-            </div>
-          </div>
-          <div id="matrixChart" class="chart"></div>
-        </div>
-        <div class="card only-exotic">
-          <div class="card-head">
-            <h3>Exotic wagers at a glance</h3>
-            <div class="btn-row">
-              <button class="btn tiny-btn" id="exoticEdit" type="button">Edit numbers</button>
-              <button class="btn tiny-btn ghost" id="exoticReset" type="button">Reset</button>
-            </div>
-          </div>
-          <p class="callout"><b>Approximations, not real data.</b> The min bets and average payouts below are rough estimates, not figures from any track or TwinSpires. Min bets vary by track, and payouts swing widely from race to race. Use <b>Edit numbers</b> to replace them with what you actually see.</p>
-          <div class="kind-legend">
-            <div class="kind-item vertical"><span class="kind-tag vertical">Vertical</span>
-              <p>Every pick is in <b>one race</b>: you're calling the order horses finish in. Exacta, Trifecta, Superfecta and Super High Five.</p></div>
-            <div class="kind-item horizontal"><span class="kind-tag horizontal">Horizontal</span>
-              <p>The ticket <b>carries across several races in a row</b>, and you need the winner of each one. Pick 3 and Pick 5.</p></div>
-          </div>
-          <div class="exotic-notes">
-            <p class="muted small-text">Click a column to sort. Hover over (or tap) a bet's name to see how it works.
-              <b>Possible outcomes</b> is plain math: every result a ticket could need with this many horses in each race.
-              <b>Break-even</b> is how often a min-bet ticket has to hit to pay for itself at the average payout (1 in ROI).</p>
-            <label class="inline-field">Horses per race
-              <select id="exoticField">
-                <option>5</option><option>6</option><option>7</option><option>8</option><option>9</option><option>10</option>
-                <option>11</option><option>12</option><option>13</option><option>14</option>
-              </select>
-            </label>
-          </div>
-          <div class="table-wrap"><table class="table exotic-table" id="exoticTable"></table></div>
         </div>
       </section>
 
@@ -276,6 +206,20 @@
             <button class="btn primary" type="submit">Save settings</button>
           </div>
         </form>
+        <!-- Risk Matrix: the % of the balance the Tracker suggests staking, by bankroll size -->
+        <div class="card">
+          <div class="card-head">
+            <h3>Risk Matrix</h3>
+            <div class="card-head-right">
+              <span class="muted small-text" id="matrixCurrent"></span>
+              <button class="btn tiny-btn" id="editTiers" type="button">Edit tiers</button>
+            </div>
+          </div>
+          <p class="muted small-text matrix-intro">How much of your bankroll to stake on each bet. Each tier starts at a bankroll size and sets a risk %,
+            and the suggested stake on the Tracker is your balance × that %. A small bankroll bets a big share so it can grow; as it grows the % drops,
+            so one bad day can't wipe out what you've built. Use <b>Edit tiers</b> to make it more or less aggressive.</p>
+          <div id="matrixChart" class="chart"></div>
+        </div>
         <div class="card">
           <h3>Data</h3>
           <div class="btn-row">
@@ -293,6 +237,39 @@
   <div id="modal" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modal-card">
       <div id="modalBody"></div>
+    </div>
+  </div>
+
+  <!-- Exotic Wagering → More Info: the exotic wagers at a glance (kept in the page, so its table keeps its controls) -->
+  <div id="exoticInfoModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="exoticInfoTitle">
+    <div class="modal-card wide">
+      <div class="card-head">
+        <h3 id="exoticInfoTitle">Exotic wagers at a glance</h3>
+        <div class="btn-row">
+          <button class="btn tiny-btn" id="exoticEdit" type="button">Edit numbers</button>
+          <button class="btn tiny-btn ghost" id="exoticReset" type="button">Reset</button>
+          <button class="btn tiny-btn ghost" id="exoticInfoClose" type="button" aria-label="Close">✕</button>
+        </div>
+      </div>
+      <p class="callout"><b>Approximations, not real data.</b> The min bets and average payouts below are rough estimates, not figures from any track or TwinSpires. Min bets vary by track, and payouts swing widely from race to race. Use <b>Edit numbers</b> to replace them with what you actually see.</p>
+      <div class="kind-legend">
+        <div class="kind-item vertical"><span class="kind-tag vertical">Vertical</span>
+          <p>Every pick is in <b>one race</b>: you're calling the order horses finish in. Exacta, Trifecta, Superfecta and Super High Five.</p></div>
+        <div class="kind-item horizontal"><span class="kind-tag horizontal">Horizontal</span>
+          <p>The ticket <b>carries across several races in a row</b>, and you need the winner of each one. Pick 3 and Pick 5.</p></div>
+      </div>
+      <div class="exotic-notes">
+        <p class="muted small-text">Click a column to sort. Hover over (or tap) a bet's name to see how it works.
+          <b>Possible outcomes</b> is plain math: every result a ticket could need with this many horses in each race.
+          <b>Break-even</b> is how often a min-bet ticket has to hit to pay for itself at the average payout (1 in ROI).</p>
+        <label class="inline-field">Horses per race
+          <select id="exoticField">
+            <option>5</option><option>6</option><option>7</option><option>8</option><option>9</option><option>10</option>
+            <option>11</option><option>12</option><option>13</option><option>14</option>
+          </select>
+        </label>
+      </div>
+      <div class="table-wrap"><table class="table exotic-table" id="exoticTable"></table></div>
     </div>
   </div>
   <div id="toast" class="toast hidden"></div>

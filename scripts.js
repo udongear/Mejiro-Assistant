@@ -26,11 +26,8 @@ let state = freshState();
 function freshState() {
   return {
     user: null,
-    mode: 'basic',  // 'basic' (Win / Place / Show) or 'exotic'; see "Basic / Exotic mode"
     bets: [],
-    strategies: [],  // { id, text, mode, category }, in display order; category is a strategyCategories id or ''
-    strategyCategories: [],  // { id, name }, in display order
-    exoticInfo: {},  // your edits to the Risk Matrix's exotic wager table: { "Exacta": { min, payout } }
+    exoticInfo: {},  // your edits to the exotic wager table (Exotic Wagering → More Info): { "Exacta": { min, payout } }
     matrix: DEFAULT_MATRIX.map(t => ({ ...t })),
     settings: { ...DEFAULT_SETTINGS },
   };
@@ -53,7 +50,9 @@ function readLocalState() {
    users/{uid}/racecards/{date}    that day's races captured from TwinSpires (state.cards holds one day)
    save() is called after every change; it writes only what differs from the last sync. */
 
-const PREF_KEYS = ['mode', 'settings', 'matrix', 'wrRange', 'hrBet', 'strategies', 'strategyCategories', 'racesShown', 'exoticInfo', 'exoticField', 'exoticModel', 'exoticBreeds', 'earningsView'];
+// strategies and strategyCategories are notes from the old Strategies tab: no longer shown, but kept
+// (the prefs document is rewritten whole on save, so dropping them here would delete them)
+const PREF_KEYS = ['settings', 'matrix', 'rateView', 'strategies', 'strategyCategories', 'racesShown', 'exoticInfo', 'exoticField', 'exoticModel', 'exoticBreeds', 'earningsView'];
 
 let fb = null;  // { auth, db } once Firebase is set up
 let synced = { prefs: '', bets: new Map(), cards: '' };  // last known Firestore copy (bet id → JSON)
@@ -351,45 +350,15 @@ document.addEventListener('click', e => {
   if (b) goTab(b.dataset.goto);
 });
 
-/* ---------- Basic / Exotic mode ----------
-   The toggle at the top of the sidebar switches every tab between straight bets (Win / Place / Show)
-   and exotic wagers. Bets, strategies and the Earnings list follow the mode; the bankroll, balance and
-   Risk Matrix tiers are shared by both. */
-
-const isExotic = () => state.mode === 'exotic';
+// Win / Place / Show bets and exotic wagers live side by side: one list of bets, one balance
 const isExoticType = type => EXOTIC_INFO.some(d => d.name === type);
-const modeBets = () => state.bets.filter(b => isExoticType(b.type) === isExotic());
-const modeBetTypes = () => BET_TYPES.filter(([t]) => isExoticType(t) === isExotic());
-
-// Static parts of the page carry .only-basic or .only-exotic; the body's class hides the other mode's
-function applyMode() {
-  document.body.classList.toggle('mode-exotic', isExotic());
-  document.body.classList.toggle('mode-basic', !isExotic());
-  $$('#modeToggle [data-mode]').forEach(b => {
-    const on = b.dataset.mode === (isExotic() ? 'exotic' : 'basic');
-    b.classList.toggle('active', on);
-    b.setAttribute('aria-pressed', on);
-  });
-  // The Exotic Wagering tab exists only in Exotic mode
-  if (!isExotic() && $('#tab-exotic').classList.contains('active')) goTab('races');
-}
-
-$('#modeToggle').addEventListener('click', e => {
-  const b = e.target.closest('[data-mode]');
-  if (!b || b.dataset.mode === (isExotic() ? 'exotic' : 'basic')) return;
-  state.mode = b.dataset.mode;
-  save();
-  renderAll();
-});
 
 function renderAll() {
-  applyMode();
   renderUser();
   renderTrackSelects();
   syncBetTypes();
   renderTracker();
   renderRaces();
-  renderStrategies();
   renderMatrix();
   renderExoticTable();
   renderHistory();
@@ -412,14 +381,13 @@ function renderTrackSelects() {
   const scraped = state.cards && state.cards.date === today() ? Object.values(state.cards.tracks).map(t => t.name).sort() : [];
   $('#trackList').innerHTML = [...new Set([...scraped, ...betTracks])].map(n => `<option value="${esc(n)}"></option>`).join('');
 
-  // The Earnings list filters by the tracks you've bet on in this mode
-  const histTracks = [...new Set(modeBets().map(b => b.track))].sort();
+  // The Earnings list filters by the tracks you've bet on
   const hist = $('#histTrack'), hv = hist.value;
-  hist.innerHTML = '<option value="">All tracks</option>' + histTracks.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
-  hist.value = histTracks.includes(hv) ? hv : '';
+  hist.innerHTML = '<option value="">All tracks</option>' + betTracks.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
+  hist.value = betTracks.includes(hv) ? hv : '';
 
-  // The Earnings list's wager types: this mode's types, plus any older ones found in its bets
-  const types = [...new Set([...modeBetTypes().map(([t]) => t), ...modeBets().map(b => b.type).filter(Boolean)])];
+  // The Earnings list's wager types: every type, plus any older ones found in your bets
+  const types = [...new Set([...BET_TYPES.map(([t]) => t), ...state.bets.map(b => b.type).filter(Boolean)])];
   const ht = $('#histType'), tv = ht.value;
   ht.innerHTML = '<option value="">All types</option>' + types.map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('');
   ht.value = types.includes(tv) ? tv : '';
@@ -429,70 +397,59 @@ function renderTrackSelects() {
    Tracker
    ========================================================= */
 
-const WR_RANGES = [['all', 'All-time'], ['90', '90 days'], ['30', '30 days'], ['7', '7 days'], ['1', 'Today']];
+/* ----- Win / hit rates: three groups of buttons in one card. All Time (every bet), WPS (Win, Place and
+   Show together), then each exotic wager. Rate = won ÷ (won + lost), all time; scratches and pending bets
+   don't count. It's a win rate for All Time and WPS, a hit rate for the exotics. Each button shows its
+   own rate; among the exotics the best is green and the worst red, so they compare at a glance. ----- */
 
-// Win rate (Basic) = won ÷ (won + lost) of Win / Place / Show bets, by bet date; scratches and pending bets don't count.
-// Exotic mode shows the hit rate per wager type instead.
-function renderWinRate() {
-  if (isExotic()) return renderHitRate();
-  const range = WR_RANGES.some(([k]) => k === state.wrRange) ? state.wrRange : 'all';
-  let from = '';
-  if (range !== 'all') {
-    const d = new Date();
-    d.setDate(d.getDate() - (num(range) - 1));
-    from = localISO(d);
-  }
-  const bets = modeBets().filter(b => !from || b.date >= from);
+const WPS_TYPES = ['Win', 'Place', 'Show'];
+
+function rateOf(bets) {
   const count = s => bets.filter(b => b.status === s).length;
-  const won = count('won'), lost = count('lost'), scratched = count('scratched');
-  const rate = won + lost ? won / (won + lost) * 100 : null;
-  $('#winRate').innerHTML = `
-    <div class="winrate-head">
-      <h3>Win rate</h3>
-      <div class="seg-group">${WR_RANGES.map(([k, label]) =>
-        `<button type="button" class="seg ${k === range ? 'active' : ''}" data-range="${k}">${label}</button>`).join('')}</div>
-    </div>
-    <div class="winrate-value">${rate == null ? '—' : +rate.toFixed(1) + '%'}</div>
-    <div class="winrate-bar"><span style="width:${rate || 0}%"></span></div>
-    <div class="sub">${won + lost
-      ? `<span class="profit">${won} won</span> · <span class="loss">${lost} lost</span>${scratched ? ` · ${scratched} scratched` : ''}`
-      : 'No settled bets in this period'}</div>`;
+  const won = count('won'), lost = count('lost');
+  return { won, lost, scratched: count('scratched'), rate: won + lost ? won / (won + lost) * 100 : null };
 }
 
-// Hit rate = hit ÷ (hit + missed) for one exotic wager type, all time. Each button shows its own rate,
-// with the best in green and the worst in red, so the types compare at a glance.
-function renderHitRate() {
-  const types = [...EXOTIC_INFO].sort((a, b) => a.stars - b.stars).map(d => d.name);
-  const stats = Object.fromEntries(types.map(t => {
-    const bets = state.bets.filter(b => b.type === t);
-    const count = s => bets.filter(b => b.status === s).length;
-    const won = count('won'), lost = count('lost');
-    return [t, { won, lost, scratched: count('scratched'), rate: won + lost ? won / (won + lost) * 100 : null }];
-  }));
-  const pick = types.includes(state.hrBet) ? state.hrBet : types[0];
-  const rates = types.map(t => stats[t].rate).filter(r => r != null);
+function renderWinRate() {
+  const exotics = [...EXOTIC_INFO].sort((a, b) => a.stars - b.stars).map(d => d.name);
+  const stats = {
+    all: rateOf(state.bets),
+    wps: rateOf(state.bets.filter(b => WPS_TYPES.includes(b.type))),
+    ...Object.fromEntries(exotics.map(t => [t, rateOf(state.bets.filter(b => b.type === t))])),
+  };
+  const pick = stats[state.rateView] ? state.rateView : 'all';
+  const exotic = exotics.includes(pick);
+  const rates = exotics.map(t => stats[t].rate).filter(r => r != null);
   const hi = Math.max(...rates), lo = Math.min(...rates);
-  const mark = r => r == null || rates.length < 2 || hi === lo ? '' : r === hi ? 'hi' : r === lo ? 'lo' : '';
+  const mark = t => {
+    const r = stats[t].rate;
+    return !exotics.includes(t) || r == null || rates.length < 2 || hi === lo ? '' : r === hi ? 'hi' : r === lo ? 'lo' : '';
+  };
+  const pct = r => (r == null ? '—' : +r.toFixed(1) + '%');
+  const seg = (key, label) => `<button type="button" class="seg hr-seg ${key === pick ? 'active' : ''}" data-rate="${esc(key)}">${esc(label)}
+    <small class="${mark(key)}">${pct(stats[key].rate)}</small></button>`;
   const s = stats[pick];
+  const what = pick === 'all' ? 'all bets' : pick === 'wps' ? 'Win, Place and Show' : pick;
   $('#winRate').innerHTML = `
     <div class="winrate-head">
-      <h3>Hit rate</h3>
-      <div class="seg-group">${types.map(t => `
-        <button type="button" class="seg hr-seg ${t === pick ? 'active' : ''}" data-hr="${esc(t)}">${esc(t)}
-          <small class="${mark(stats[t].rate)}">${stats[t].rate == null ? '—' : +stats[t].rate.toFixed(1) + '%'}</small></button>`).join('')}</div>
+      <h3>${exotic ? 'Hit rate' : 'Win rate'}</h3>
+      <div class="rate-groups">
+        <div class="seg-group">${seg('all', 'All Time')}</div>
+        <div class="seg-group">${seg('wps', 'WPS')}</div>
+        <div class="seg-group">${exotics.map(t => seg(t, t)).join('')}</div>
+      </div>
     </div>
-    <div class="winrate-value">${s.rate == null ? '—' : +s.rate.toFixed(1) + '%'}</div>
+    <div class="winrate-value">${pct(s.rate)}</div>
     <div class="winrate-bar"><span style="width:${s.rate || 0}%"></span></div>
     <div class="sub">${s.won + s.lost
-      ? `<span class="profit">${s.won} hit</span> · <span class="loss">${s.lost} missed</span>${s.scratched ? ` · ${s.scratched} scratched` : ''} · ${esc(pick)}, all time`
-      : `No settled ${esc(pick)} bets yet`}</div>`;
+      ? `<span class="profit">${s.won} ${exotic ? 'hit' : 'won'}</span> · <span class="loss">${s.lost} ${exotic ? 'missed' : 'lost'}</span>${s.scratched ? ` · ${s.scratched} scratched` : ''} · ${esc(what)}, all time`
+      : `No settled ${pick === 'all' ? '' : esc(what) + ' '}bets yet`}</div>`;
 }
 
 $('#winRate').addEventListener('click', e => {
-  const range = e.target.closest('[data-range]'), hr = e.target.closest('[data-hr]');
-  if (range) state.wrRange = range.dataset.range;
-  else if (hr) state.hrBet = hr.dataset.hr;
-  else return;
+  const b = e.target.closest('[data-rate]');
+  if (!b) return;
+  state.rateView = b.dataset.rate;
   save();
   renderWinRate();
 });
@@ -504,25 +461,28 @@ function renderTracker() {
   renderWinRate();
   const br = bankroll();
   const tier = currentTier(br);
-  const balance = `<div class="stat accent balance"><div class="label">Balance</div><div class="value">${money(br)}</div></div>`;
-  // Exotic stakes start at each wager's min bet, so Exotic shows only the (shared) balance
-  $('#stats').innerHTML = isExotic() ? balance : `
+  // Percent Risk, Balance in the middle, Suggested stake (from the Risk Matrix in Settings)
+  $('#stats').innerHTML = `
     <div class="stat"><div class="label">Percent Risk</div><div class="value">${tier ? tier.pct + '%' : '—'}</div></div>
-    ${balance}
+    <div class="stat accent balance"><div class="label">Balance</div><div class="value">${money(br)}</div></div>
     <div class="stat"><div class="label">Suggested stake</div><div class="value stake-value">${money(suggestedStake())}</div></div>`;
 }
 
-/* ----- Log bets: shared date & track, one row per bet ----- */
+/* ----- Log bets: one row per bet, each with its own date ----- */
 
 const BET_TYPES = [['Win', '1st'], ['Place', '1st–2nd'], ['Show', '1st–3rd'],
   ['Exacta', '1st–2nd in order'], ['Trifecta', '1st–3rd in order'], ['Superfecta', '1st–4th in order'],
   ['Super High Five', '1st–5th in order'], ['Pick 3', 'winners of 3 races'], ['Pick 5', 'winners of 5 races']];
 
-// The Bet type list holds only the current mode's types; exotic wagers show just their names
-const betTypeOptions = selected => '<option value="">Select…</option>' + modeBetTypes().map(([t, places]) =>
-  `<option value="${t}" ${selected === t ? 'selected' : ''}>${t}${isExotic() ? '' : ` (${places})`}</option>`).join('');
+// Win / Place / Show (with the places they pay on), then the exotic wagers by name
+const betTypeOptions = selected => {
+  const opt = ([t, places]) => `<option value="${t}" ${selected === t ? 'selected' : ''}>${t}${isExoticType(t) ? '' : ` (${places})`}</option>`;
+  return '<option value="">Select…</option>' +
+    `<optgroup label="Win / Place / Show">${BET_TYPES.filter(([t]) => !isExoticType(t)).map(opt).join('')}</optgroup>` +
+    `<optgroup label="Exotic">${BET_TYPES.filter(([t]) => isExoticType(t)).map(opt).join('')}</optgroup>`;
+};
 
-// After a mode switch, each row keeps its type if the new mode offers it, and is cleared otherwise
+// Refreshes each row's Bet type list, keeping its choice
 function syncBetTypes() {
   $$('#betRows [name=type]').forEach(sel => {
     const was = sel.value;
@@ -532,12 +492,13 @@ function syncBetTypes() {
   $$('#betRows tr').forEach(syncHorse);
 }
 
-// Rows start blank apart from the racetrack, which a new row copies from the one above.
+// Rows start blank apart from the date and racetrack, which a new row copies from the one above.
 // Horse # is a number picker: one horse for Win / Place / Show, one per place or race for an
 // exotic wager. Pick bets log the first race in Race #.
 function betRowHTML(prev = {}) {
   return `
     <tr>
+      <td data-label="Date"><input type="date" name="date" required value="${esc(prev.date || '')}"></td>
       <td data-label="Racetrack"><input type="text" name="track" list="trackList" required autocomplete="off" placeholder="Type or pick" class="w-md" value="${esc(prev.track || '')}"></td>
       <td data-label="Race #"><input type="number" name="race" min="1" max="20" required class="w-xs"></td>
       <td data-label="Bet type"><select name="type" required>${betTypeOptions()}</select></td>
@@ -547,7 +508,7 @@ function betRowHTML(prev = {}) {
         <option value="">Select…</option><option value="won">Won</option><option value="lost">Lost</option><option value="scratched">Scratched</option>
       </select></td>
       <td data-label="Total return ($)"><input type="number" name="payout" min="0" step="0.01" required placeholder="Incl. stake" class="w-sm"></td>
-      <td data-label="Actual winners" class="only-exotic"><button type="button" class="winners-btn" data-winners="" disabled>—</button></td>
+      <td data-label="Actual winners"><button type="button" class="winners-btn" data-winners="" disabled>—</button></td>
       <td class="row-remove"><button type="button" class="btn tiny-btn ghost danger" data-remove-row title="Remove this bet">✕</button></td>
     </tr>`;
 }
@@ -691,22 +652,22 @@ function updateBetRows() {
 }
 
 function resetBetForm() {
-  $('#betForm').date.value = '';
   $('#betRows').innerHTML = betRowHTML();
   $('#importNote').classList.add('hidden');
   updateBetRows();
 }
 
-// A new row starts at the same racetrack as the last one, so the cursor goes to its Race #
+// A new row starts on the same date and racetrack as the last one, so the cursor goes to the first box left to fill
 $('#addBetRow').addEventListener('click', () => {
-  const last = $$('#betRows [name=track]').pop();
-  $('#betRows').insertAdjacentHTML('beforeend', betRowHTML({ track: last ? last.value : '' }));
+  const last = $$('#betRows tr').pop();
+  const from = name => (last ? last.querySelector(`[name=${name}]`).value : '');
+  $('#betRows').insertAdjacentHTML('beforeend', betRowHTML({ date: from('date'), track: from('track') }));
   updateBetRows();
   const row = $$('#betRows tr').pop();
-  row.querySelector(row.querySelector('[name=track]').value ? '[name=race]' : '[name=track]').focus();
+  row.querySelector(['date', 'track', 'race'].map(n => `[name=${n}]`).find(s => !row.querySelector(s).value) || '[name=race]').focus();
 });
 
-// Exotic stake starts at the wager's min bet from the Risk Matrix's exotic table (your edits included).
+// Exotic stake starts at the wager's min bet from the exotic wager table (More Info; your edits included).
 // It follows the bet type until you type your own amount.
 function autofillStake(tr) {
   const stake = tr.querySelector('[name=stake]');
@@ -754,7 +715,6 @@ $('#betRows').addEventListener('click', e => {
 
 $('#betForm').addEventListener('submit', e => {
   e.preventDefault();
-  const f = e.target;
   const rows = $$('#betRows tr');
 
   // Every bet needs the horses its type calls for: 1 for Win / Place / Show, 2 for an Exacta, 5 for a Pick 5…
@@ -779,7 +739,7 @@ $('#betForm').addEventListener('submit', e => {
     const winners = tr.querySelector('.winners-btn').dataset.winners;
     return {
       id: uid(),
-      date: tr.dataset.date || f.date.value,  // imported rows from another day keep their own date
+      date: v('date').value,
       track: v('track').value.trim(),
       race: v('race').value,
       // Saved like 5, 3-5-1, or 3/5/1 for a Pick bet
@@ -849,7 +809,7 @@ function readTwinSpiresCSV(text) {
     const spec = type && pickSpec(type);
     const debit = num(get(r, 'debit')), credit = num(get(r, 'credit'));
     return {
-      date: isNaN(when) ? '' : localISO(when),
+      date: isNaN(when) ? '' : localISO(when), at: isNaN(when) ? 0 : when.getTime(),
       track: get(r, 'track'), race: get(r, 'race'), pool: get(r, 'pool'), type,
       // One horse per place or race; anything else (a box, several horses in a spot) is left for you to pick
       picks: spec && legs.length === spec.legs && legs.every(l => l.length === 1 && /^\d+$/.test(l[0])) ? legs.map(l => +l[0]) : [],
@@ -868,8 +828,8 @@ $('#importCsv').addEventListener('change', async e => {
   const all = readTwinSpiresCSV(await file.text());
   if (!all) return toast("That doesn't look like a TwinSpires account history CSV");
 
-  // Only this mode's bets; leave out any already logged (same day, track, race, type, horses and stake)
-  const mine = all.filter(b => b.type && isExoticType(b.type) === isExotic());
+  // Every bet we track; leave out any already logged (same day, track, race, type, horses and stake)
+  const mine = all.filter(b => b.type);
   const sig = b => [b.date, b.track.toLowerCase(), num(b.race), b.type, b.horse, num(b.stake).toFixed(2)].join('|');
   const logged = new Map();
   state.bets.forEach(b => logged.set(sig(b), (logged.get(sig(b)) || 0) + 1));
@@ -878,23 +838,15 @@ $('#importCsv').addEventListener('change', async e => {
     if (!logged.get(k)) return true;
     logged.set(k, logged.get(k) - 1);
     return false;
-  });
+  }).sort((a, b) => a.at - b.at);  // oldest first (TwinSpires lists newest first)
 
   if (fresh.length) {
-    // Blank rows make way; the Date box takes the day most of the bets were on
+    // Blank rows make way; each bet fills in its own date
     $$('#betRows tr').forEach(tr => { if (!tr.querySelector('[name=track]').value && !tr.querySelector('[name=type]').value) tr.remove(); });
-    const f = $('#betForm');
-    const days = fresh.map(b => b.date);
-    if (!f.date.value) f.date.value = days.sort((a, b) => days.filter(x => x === b).length - days.filter(x => x === a).length)[0];
     fresh.forEach(b => {
-      $('#betRows').insertAdjacentHTML('beforeend', betRowHTML({ track: b.track }));
+      $('#betRows').insertAdjacentHTML('beforeend', betRowHTML({ date: b.date, track: b.track }));
       const tr = $$('#betRows tr').pop(), v = n => tr.querySelector(`[name=${n}]`);
       const fire = el => el.dispatchEvent(new Event('change', { bubbles: true }));
-      // A bet from another day keeps its own date, shown under the racetrack
-      if (b.date && b.date !== f.date.value) {
-        tr.dataset.date = b.date;
-        v('track').insertAdjacentHTML('afterend', `<small class="row-date">${esc(fmtDate(b.date))}</small>`);
-      }
       v('race').value = b.race;
       v('type').value = b.type; fire(v('type'));
       v('stake').value = +b.stake.toFixed(2);
@@ -906,15 +858,13 @@ $('#importCsv').addEventListener('change', async e => {
   }
 
   // What was filled in, and what wasn't
-  const other = all.filter(b => b.type && isExoticType(b.type) !== isExotic()).length;
   const unknown = [...new Set(all.filter(b => !b.type).map(b => b.pool || 'unknown'))];
   const needPicks = fresh.filter(b => !b.picks.length).length;
   const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
   const notes = [
-    fresh.length ? `Filled in ${plural(fresh.length, 'bet')} from TwinSpires. Check them, add anything missing${isExotic() ? ' (like Actual winners)' : ''}, then log.` : 'No new bets to fill in.',
+    fresh.length ? `Filled in ${plural(fresh.length, 'bet')} from TwinSpires. Check them, add anything missing${fresh.some(b => isExoticType(b.type) && b.result === 'lost') ? ' (like Actual winners for lost exotics)' : ''}, then log.` : 'No new bets to fill in.',
     mine.length > fresh.length ? `${plural(mine.length - fresh.length, 'bet')} already logged, so left out.` : '',
     needPicks ? `${plural(needPicks, 'bet')} used several horses in a spot (a box or key), so pick ${needPicks === 1 ? 'its' : 'their'} Horse # yourself.` : '',
-    other ? `${plural(other, isExotic() ? 'Win / Place / Show bet' : 'exotic bet')} in the file belong${other === 1 ? 's' : ''} to ${isExotic() ? 'Basic' : 'Exotic'} mode: switch and import again for ${other === 1 ? 'it' : 'them'}.` : '',
     unknown.length ? `Not tracked here: ${unknown.map(esc).join(', ')}.` : '',
     fresh.some(b => b.result === 'lost') ? 'Bets that paid nothing are set to Lost; change any race that hasn\'t run yet.' : '',
   ].filter(Boolean);
@@ -1061,9 +1011,9 @@ function renderRaces() {
 
   $('#exoticCard').classList.toggle('hidden', !tracks.length);
   $('#exoticEmpty').classList.toggle('hidden', !!tracks.length);
-  // Easiest to hardest, by the same difficulty stars as the Risk Matrix's exotic wager table,
+  // Easiest to hardest, by the same difficulty stars as the exotic wager table (More Info),
   // colored the same way: vertical (one race) in cyan, horizontal (several races) in pink.
-  // Each shows today's 10 most likely tickets for that wager underneath (Exotic mode only).
+  // Each shows today's 10 most likely tickets for that wager underneath.
   $('#exoticTiles').innerHTML = [...EXOTIC_INFO].sort((a, b) => a.stars - b.stars).map(d => `
     <button type="button" class="exotic-tile ${d.kind}" data-calc="${esc(d.name)}" title="Today's 10 most likely ${esc(d.name)} tickets">
       <span class="tile-play" aria-hidden="true">${PLAY_SVG}</span>
@@ -1071,7 +1021,7 @@ function renderRaces() {
       <span class="kind-tag ${d.kind}">${d.kind === 'vertical' ? 'Single Race' : 'Multiple Races'}</span></button>`).join('');
   renderModelToggle();
   renderBreedFilter();
-  if (isExotic() && tracks.length) renderExoticResults();
+  if (tracks.length) renderExoticResults();
 
   const track = tracks.find(x => x.key === racesView.key);
   if (!track) {
@@ -2152,146 +2102,7 @@ function mejiroCapture(site) {
 }
 
 /* =========================================================
-   Strategies — short notes, kept per mode. Basic is one list of Win / Place / Show notes;
-   Exotic groups its notes by categories you name (Edit categories).
-   Drag the ☰ handle to reorder within a group; a note's menu moves it to another category.
-   ========================================================= */
-
-const strategyById = id => state.strategies.find(s => s.id === id);
-const categories = () => state.strategyCategories || [];
-// Notes from before the modes have no mode: categorized ones were exotic, the rest Win / Place / Show
-const strategyMode = s => s.mode || (s.category ? 'exotic' : 'basic');
-
-function renderStrategies() {
-  // Stamp older notes with their mode, so clearing a category later can't move them to Basic
-  (state.strategies || []).forEach(s => { if (!s.mode) s.mode = strategyMode(s); });
-  const cats = isExotic() ? categories() : [];
-  const known = new Set(cats.map(c => c.id));
-  const notes = (state.strategies || []).filter(s => strategyMode(s) === (isExotic() ? 'exotic' : 'basic'));
-  // One group per category, then Uncategorized (shown when it has notes, or before any category exists)
-  const groups = [...cats, { id: '', name: cats.length ? 'Uncategorized' : 'Your strategies' }];
-  const inGroup = g => notes.filter(s => (known.has(s.category) ? s.category : '') === g.id);
-  const catSelect = s => `<select class="strategy-cat" aria-label="Category"><option value="">Uncategorized</option>${cats.map(c =>
-    `<option value="${esc(c.id)}" ${s.category === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select>`;
-  $('#strategyGroups').innerHTML = groups.filter(g => g.id || inGroup(g).length || !cats.length).map(g => `
-    <div class="card strategy-group">
-      <div class="card-head">
-        <h3>${esc(g.name)} <span class="muted small-text">${inGroup(g).length || ''}</span></h3>
-        <button type="button" class="btn tiny-btn" data-add-strategy="${esc(g.id)}">+ Add</button>
-      </div>
-      <ul class="strategy-list">${inGroup(g).map(s => `
-        <li class="strategy" data-id="${s.id}">
-          <button type="button" class="drag-handle" title="Drag to reorder" aria-label="Drag to reorder">☰</button>
-          <textarea rows="2" placeholder="Describe a strategy…">${esc(s.text)}</textarea>
-          <div class="strategy-side">
-            ${cats.length ? catSelect(s) : ''}
-            <button type="button" class="btn tiny-btn ghost danger" data-delete-strategy title="Delete">✕</button>
-          </div>
-        </li>`).join('') || `<li class="empty">${notes.length ? 'Nothing here yet.' : 'No strategies yet. Click <b>+ Add strategy</b> to write one.'}</li>`}</ul>
-    </div>`).join('');
-}
-
-function addStrategy(category) {
-  const s = { id: uid(), text: '', mode: isExotic() ? 'exotic' : 'basic', category };
-  state.strategies = [...(state.strategies || []), s];
-  save();
-  renderStrategies();
-  $(`.strategy[data-id="${s.id}"] textarea`).focus();
-}
-
-$('#addStrategy').addEventListener('click', () => addStrategy(''));
-
-// Typing saves without re-rendering, so the cursor stays put
-$('#strategyGroups').addEventListener('input', e => {
-  if (e.target.tagName !== 'TEXTAREA') return;
-  strategyById(e.target.closest('.strategy').dataset.id).text = e.target.value;
-  save();
-});
-
-$('#strategyGroups').addEventListener('change', e => {
-  if (!e.target.classList.contains('strategy-cat')) return;
-  strategyById(e.target.closest('.strategy').dataset.id).category = e.target.value;
-  save();
-  renderStrategies();
-});
-
-$('#strategyGroups').addEventListener('click', async e => {
-  const add = e.target.closest('[data-add-strategy]');
-  if (add) return addStrategy(add.dataset.addStrategy);
-  if (!e.target.closest('[data-delete-strategy]')) return;
-  const s = strategyById(e.target.closest('.strategy').dataset.id);
-  if (s.text.trim() && !await confirmModal('Delete strategy?', 'This removes it permanently.', 'Delete', true)) return;
-  state.strategies = state.strategies.filter(x => x !== s);
-  save();
-  renderStrategies();
-});
-
-// Add, rename and delete categories; changes apply on Save. A deleted category's strategies become Uncategorized.
-function openCategoryEditor() {
-  const draft = categories().map(c => ({ ...c }));
-  const draw = () => {
-    openModal(`
-      <h3>Edit categories</h3>
-      <p class="muted small-text">Group your exotic strategies however you like: Exactas, Trifecta boxes, Pick 5s… Deleting a category moves its strategies to Uncategorized.</p>
-      <ul class="cat-list">${draft.map((c, i) => `
-        <li><input type="text" data-i="${i}" value="${esc(c.name)}" placeholder="Category name" maxlength="40">
-          <button type="button" class="btn tiny-btn ghost danger" data-del="${i}" title="Delete category">✕</button></li>`).join('')
-        || '<li class="empty">No categories yet.</li>'}</ul>
-      <button class="btn" id="catAdd" type="button">+ Add category</button>
-      <div class="modal-actions">
-        <button class="btn ghost" id="catCancel" type="button">Cancel</button>
-        <button class="btn primary" id="catSave" type="button">Save</button>
-      </div>`);
-    $$('.cat-list input').forEach(inp => { inp.oninput = () => { draft[+inp.dataset.i].name = inp.value; }; });
-    $$('.cat-list [data-del]').forEach(b => { b.onclick = () => { draft.splice(+b.dataset.del, 1); draw(); }; });
-    $('#catAdd').onclick = () => { draft.push({ id: uid(), name: '' }); draw(); $$('.cat-list input').pop().focus(); };
-    $('#catCancel').onclick = closeModal;
-    $('#catSave').onclick = () => {
-      state.strategyCategories = draft.map(c => ({ id: c.id, name: c.name.trim() })).filter(c => c.name);
-      const ids = new Set(state.strategyCategories.map(c => c.id));
-      (state.strategies || []).forEach(s => { if (s.category && !ids.has(s.category)) s.category = ''; });
-      save();
-      renderStrategies();
-      closeModal();
-    };
-  };
-  draw();
-}
-
-$('#editCategories').addEventListener('click', openCategoryEditor);
-
-// Drag with pointer events (works with mouse and touch): the row follows the handle,
-// and its group's list reorders as it passes other rows
-$('#strategyGroups').addEventListener('pointerdown', e => {
-  const handle = e.target.closest('.drag-handle');
-  if (!handle) return;
-  e.preventDefault();
-  const row = handle.closest('.strategy');
-  const list = row.closest('.strategy-list');
-  row.classList.add('dragging');
-  try { handle.setPointerCapture(e.pointerId); } catch (err) { /* capture is a nicety; dragging still works */ }
-
-  const move = ev => {
-    const others = [...list.children].filter(li => li !== row);
-    const after = others.find(li => ev.clientY < li.getBoundingClientRect().top + li.offsetHeight / 2);
-    if (after) { if (row.nextElementSibling !== after) list.insertBefore(row, after); }
-    else if (list.lastElementChild !== row) list.appendChild(row);
-  };
-  const end = () => {
-    handle.removeEventListener('pointermove', move);
-    row.classList.remove('dragging');
-    // This mode's notes in their new order, then the other mode's, untouched
-    const order = $$('#strategyGroups .strategy').map(li => li.dataset.id);
-    state.strategies = [...order.map(strategyById).filter(Boolean), ...state.strategies.filter(s => !order.includes(s.id))];
-    save();
-  };
-  handle.addEventListener('pointermove', move);
-  handle.addEventListener('pointerup', end, { once: true });
-  handle.addEventListener('pointercancel', end, { once: true });
-});
-
-/* =========================================================
-   Risk Matrix
+   Risk Matrix (in Settings): the % of the balance the Tracker suggests staking, by bankroll size
    ========================================================= */
 
 function renderMatrix() {
@@ -2529,8 +2340,24 @@ $('#exoticReset').addEventListener('click', async () => {
   renderExoticTable();
 });
 
+// The table lives in a popup opened by Exotic Wagering's More Info button. It stays in the page while
+// closed, so its sorting, edits and horses-per-race choice carry on where you left them.
+function closeExoticInfo() {
+  $('#exoticInfoModal').classList.add('hidden');
+  hideTip();
+}
+$('#exoticMoreInfo').addEventListener('click', () => {
+  renderExoticTable();
+  $('#exoticInfoModal').classList.remove('hidden');
+});
+$('#exoticInfoClose').addEventListener('click', closeExoticInfo);
+$('#exoticInfoModal').addEventListener('mousedown', e => { if (e.target.id === 'exoticInfoModal') closeExoticInfo(); });
+// Esc closes it, unless a confirmation (like Reset's) is open on top of it. Checked before the general
+// Esc handler closes that confirmation, so one press closes one popup.
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && $('#modal').classList.contains('hidden')) closeExoticInfo(); }, true);
+
 /* =========================================================
-   Earnings — List (every bet of this mode, filterable) or Calendar (balance at the end of each day)
+   Earnings — List (every bet, filterable) or Calendar (balance at the end of each day)
    ========================================================= */
 
 const earningsView = () => (state.earningsView === 'calendar' ? 'calendar' : 'list');
@@ -2544,8 +2371,8 @@ $('#earningsView').addEventListener('click', e => {
 });
 
 /* ----- Calendar: one month at a time. Each day shows what you won or lost that day (small) and your
-   balance at the end of it (big): the starting bankroll plus every settled bet up to that day, Basic
-   and Exotic together, since the balance is shared. Green = up, red = down, grey = no change or no bets.
+   balance at the end of it (big): the starting bankroll plus every settled bet up to that day.
+   Green = up, red = down, grey = no change or no bets.
    Days before your first bet and days still to come stay blank. ----- */
 
 let calMonth = null;  // 'YYYY-MM' on screen; this month until you move
@@ -2617,7 +2444,7 @@ function renderCalendar() {
       <div><small>Best day</small><b class="${month.best > 0 ? 'profit' : 'muted'}">${month.best == null ? '—' : money(month.best, true)}</b></div>
     </div>
     <div class="cal-grid">${cells.join('')}</div>
-    <p class="muted tiny cal-note">Small number: what you won or lost that day. Big number: your balance at the end of it, Basic and Exotic bets together.
+    <p class="muted tiny cal-note">Small number: what you won or lost that day. Big number: your balance at the end of it, every bet counted.
       ${days.length ? '' : 'Log a bet and its day shows up here.'}</p>`;
 }
 
@@ -2638,11 +2465,11 @@ $('#earningsCalendar').addEventListener('click', e => {
 // Program numbers show as "#5" (or "#1A" for coupled entries); older bets saved a horse's name
 function horseLabel(h) { return /^\d+[A-Z]?$/i.test(String(h).trim()) ? '#' + String(h).trim().toUpperCase() : h; }
 
-// This mode's bets only: Win / Place / Show in Basic, exotic wagers in Exotic
+// Every bet, Win / Place / Show and exotic wagers together, through the filters
 function historyRows() {
   const track = $('#histTrack').value, type = $('#histType').value, result = $('#histResult').value;
   const from = $('#histFrom').value, to = $('#histTo').value;
-  return modeBets()
+  return state.bets
     .filter(b => (!track || b.track === track) && (!type || b.type === type) && (!result || b.status === result) && (!from || b.date >= from) && (!to || b.date <= to))
     .sort((a, b) => a.date.localeCompare(b.date) || num(a.race) - num(b.race) || (a.settledAt || '').localeCompare(b.settledAt || ''));
 }
@@ -2690,17 +2517,15 @@ function renderHistory() {
       <div class="sub">${decided.length ? (wins.length / decided.length * 100).toFixed(0) + '% hit rate' : '—'}</div></div>
     <div class="stat"><div class="label">Best win</div><div class="value ${plClass(best)}">${money(best, true)}</div></div>`;
 
-  // Exotic mode: what actually came in, for bets you lost (pick or change it any time)
+  // For a lost exotic bet: what actually came in (pick or change it any time)
   const winnersCell = b => {
-    if (!isExotic()) return '';
     const info = betInfo(b.type);
     if (b.status !== 'lost' || !info) return '<td class="muted">—</td>';
     return `<td><button type="button" class="winners-btn" data-hist-winners="${b.id}"
       title="${b.winners && b.winners.length ? 'Change' : 'Add'} the horses that actually finished">${winnersHTML(b.winners, info) || '+ Add'}</button></td>`;
   };
-  // Exotic mode: how many of your horses came in (see accuracyOf)
+  // For an exotic bet: how many of your horses came in (see accuracyOf)
   const accuracyCell = b => {
-    if (!isExotic()) return '';
     const a = accuracyOf(b);
     if (!a) return `<td class="muted" ${b.status === 'lost' && betInfo(b.type) ? 'title="Add the actual winners to see how close it was"' : ''}>—</td>`;
     const pct = a.hits / a.legs;
@@ -2733,9 +2558,9 @@ function renderHistory() {
 
   $('#histTable').innerHTML = `
     <thead><tr><th>Date</th><th>Track</th><th>Race</th><th>Horse #</th><th>Type</th><th>Result</th>
-      ${isExotic() ? '<th>Actual winners</th><th title="How many of your horses came in, in any order (race by race for Pick bets)">Accuracy</th>' : ''}
+      <th>Actual winners</th><th title="Exotic bets: how many of your horses came in, in any order (race by race for Pick bets)">Accuracy</th>
       <th class="num">Stake</th><th class="num">Return</th><th></th></tr></thead>
-    <tbody>${body || `<tr><td colspan="${isExotic() ? 11 : 9}" class="empty">No ${isExotic() ? 'exotic' : 'Win / Place / Show'} bets here yet. Log one from the Tracker.</td></tr>`}</tbody>`;
+    <tbody>${body || '<tr><td colspan="11" class="empty">No bets here yet. Log one from the Tracker.</td></tr>'}</tbody>`;
 }
 
 ['#histTrack', '#histType', '#histResult', '#histFrom', '#histTo'].forEach(id => $(id).addEventListener('change', renderHistory));
@@ -2783,15 +2608,15 @@ function download(name, text, type) {
 }
 
 $('#exportCsv').addEventListener('click', () => {
-  const cols = ['date', 'track', 'race', 'horse', 'type', 'stake', 'status', 'payout', 'profit', ...(isExotic() ? ['winners'] : [])];
+  const cols = ['date', 'track', 'race', 'horse', 'type', 'stake', 'status', 'payout', 'profit', 'winners'];
   const cell = v => /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : v;
   // Winners read like the Horse # column: 4-7-1, or 4/7/1 for a Pick bet
   const value = (b, c) => c === 'profit' ? profitOf(b).toFixed(2)
     : c === 'winners' ? (b.winners || []).join(betInfo(b.type) && betInfo(b.type).kind === 'horizontal' ? '/' : '-')
     : b[c] ?? '';
-  // This mode's bets, like the Earnings list
-  const lines = modeBets().map(b => cols.map(c => cell(value(b, c))).join(','));
-  download(`mejiro-${isExotic() ? 'exotic' : 'basic'}-bets-${today()}.csv`, [cols.join(','), ...lines].join('\n'), 'text/csv');
+  // Every bet
+  const lines = state.bets.map(b => cols.map(c => cell(value(b, c))).join(','));
+  download(`mejiro-bets-${today()}.csv`, [cols.join(','), ...lines].join('\n'), 'text/csv');
 });
 
 /* =========================================================
