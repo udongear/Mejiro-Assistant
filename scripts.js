@@ -53,7 +53,7 @@ function readLocalState() {
    users/{uid}/racecards/{date}    that day's races captured from TwinSpires (state.cards holds one day)
    save() is called after every change; it writes only what differs from the last sync. */
 
-const PREF_KEYS = ['mode', 'settings', 'matrix', 'wrRange', 'hrBet', 'strategies', 'strategyCategories', 'racesShown', 'exoticInfo', 'exoticField', 'exoticModel', 'exoticBreeds'];
+const PREF_KEYS = ['mode', 'settings', 'matrix', 'wrRange', 'hrBet', 'strategies', 'strategyCategories', 'racesShown', 'exoticInfo', 'exoticField', 'exoticModel', 'exoticBreeds', 'earningsView'];
 
 let fb = null;  // { auth, db } once Firebase is set up
 let synced = { prefs: '', bets: new Map(), cards: '' };  // last known Firestore copy (bet id → JSON)
@@ -353,7 +353,7 @@ document.addEventListener('click', e => {
 
 /* ---------- Basic / Exotic mode ----------
    The toggle at the top of the sidebar switches every tab between straight bets (Win / Place / Show)
-   and exotic wagers. Bets, strategies and History follow the mode; the bankroll, balance and
+   and exotic wagers. Bets, strategies and the Earnings list follow the mode; the bankroll, balance and
    Risk Matrix tiers are shared by both. */
 
 const isExotic = () => state.mode === 'exotic';
@@ -412,13 +412,13 @@ function renderTrackSelects() {
   const scraped = state.cards && state.cards.date === today() ? Object.values(state.cards.tracks).map(t => t.name).sort() : [];
   $('#trackList').innerHTML = [...new Set([...scraped, ...betTracks])].map(n => `<option value="${esc(n)}"></option>`).join('');
 
-  // History filters by the tracks you've bet on in this mode
+  // The Earnings list filters by the tracks you've bet on in this mode
   const histTracks = [...new Set(modeBets().map(b => b.track))].sort();
   const hist = $('#histTrack'), hv = hist.value;
   hist.innerHTML = '<option value="">All tracks</option>' + histTracks.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
   hist.value = histTracks.includes(hv) ? hv : '';
 
-  // History's wager types: this mode's types, plus any older ones found in its bets
+  // The Earnings list's wager types: this mode's types, plus any older ones found in its bets
   const types = [...new Set([...modeBetTypes().map(([t]) => t), ...modeBets().map(b => b.type).filter(Boolean)])];
   const ht = $('#histType'), tv = ht.value;
   ht.innerHTML = '<option value="">All types</option>' + types.map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('');
@@ -922,7 +922,7 @@ $('#importCsv').addEventListener('change', async e => {
   $('#importNote').classList.remove('hidden');
 });
 
-// Bets saved before the Tracker logged results are still "open"; History settles them
+// Bets saved before the Tracker logged results are still "open"; the Earnings list settles them
 function openWonModal(bet) {
   openModal(`
     <h3>${esc(horseLabel(bet.horse))} won 🎉</h3>
@@ -1831,14 +1831,15 @@ function mejiroCapture(site) {
 
   const texts = () => leaves().map(el => [el, clean(el.textContent)]).filter(([, t]) => t && t.length < 40);
   const raceNow = () => { const hit = texts().find(([, t]) => /^RACE\s*\d{1,2}$/i.test(t)); return hit ? +hit[1].match(/\d+/)[0] : 0; };
-  /* Race type: thoroughbred, harness or quarter (horse). From the address first (TwinSpires program addresses
-     name it, like ".../Thoroughbred/5/advanced"), else from a lone type label near the top of the page.
-     '' when neither says; the Today's Races list row is the fallback when capturing every track. */
+  /* Race type: thoroughbred, harness or quarter (horse). From the address first: TwinSpires program addresses
+     have it as its own part, after the track, like /bet/program/classic/horseshoe-indianapolis/ind/Thoroughbred/9/advanced
+     (only a whole part counts, so a track named after a type can't fool it). Else from a lone type label near
+     the top of the page. '' when neither says; the Today's Races list row is the fallback when capturing every track. */
   const breedIn = s => /thoroughbred/i.test(s) ? 'thoroughbred' : /harness|standardbred/i.test(s) ? 'harness'
-    : /quarter[\s_-]*horse/i.test(s) ? 'quarter' : '';
+    : /quarter(?:[\s_-]|%20)*horse/i.test(s) ? 'quarter' : '';
   const breedNow = () => {
-    const fromAddress = breedIn(location.pathname + location.hash);
-    if (fromAddress) return fromAddress;
+    const part = location.pathname.split('/').find(p => /^(thoroughbred|harness|standardbred|quarter(?:[-_ ]|%20)?horse)$/i.test(p));
+    if (part) return breedIn(part);
     const near = new Set(texts().filter(([el, t]) => /^(thoroughbred|harness|standardbred|quarter\s*horse)$/i.test(t)
       && el.getBoundingClientRect().top < 400).map(([, t]) => breedIn(t)));
     return near.size === 1 ? [...near][0] : '';
@@ -2529,8 +2530,110 @@ $('#exoticReset').addEventListener('click', async () => {
 });
 
 /* =========================================================
-   History
+   Earnings — List (every bet of this mode, filterable) or Calendar (balance at the end of each day)
    ========================================================= */
+
+const earningsView = () => (state.earningsView === 'calendar' ? 'calendar' : 'list');
+
+$('#earningsView').addEventListener('click', e => {
+  const b = e.target.closest('[data-view]');
+  if (!b || b.dataset.view === earningsView()) return;
+  state.earningsView = b.dataset.view;
+  save();
+  renderHistory();
+});
+
+/* ----- Calendar: one month at a time. Each day shows what you won or lost that day (small) and your
+   balance at the end of it (big): the starting bankroll plus every settled bet up to that day, Basic
+   and Exotic together, since the balance is shared. Green = up, red = down, grey = no change or no bets.
+   Days before your first bet and days still to come stay blank. ----- */
+
+let calMonth = null;  // 'YYYY-MM' on screen; this month until you move
+// Sums of dollars and cents drift (0.1 + 0.2), so each day and running total is kept to the cent
+const cents = n => Math.round(n * 100) / 100;
+
+// For narrow screens: no cents from $100 up, thousands as k ($1.2k)
+function moneyShort(n, signed = false) {
+  const a = Math.abs(n);
+  const s = a >= 1000 ? +(a / 1000).toFixed(a >= 10000 ? 0 : 1) + 'k' : a >= 100 ? Math.round(a) : a % 1 ? a.toFixed(2) : a;
+  return (n > 0 && signed ? '+' : n < 0 ? '-' : '') + '$' + s;
+}
+// Both, and CSS shows the one that fits the calendar's width
+const calMoney = (n, signed) => `<span class="cal-full">${money(n, signed)}</span><span class="cal-short">${moneyShort(n, signed)}</span>`;
+
+function renderCalendar() {
+  const now = today();
+  if (!calMonth) calMonth = now.slice(0, 7);
+  const [y, m] = calMonth.split('-').map(Number);
+  const byDay = new Map();
+  state.bets.forEach(b => { if (b.date) byDay.set(b.date, (byDay.get(b.date) || 0) + profitOf(b)); });
+  const days = [...byDay.keys()].sort();
+  const firstMonth = (days[0] || now).slice(0, 7);
+  // Balance at the end of the day before this month starts
+  let bal = cents(num(state.settings.startingBankroll) + days.filter(d => d < calMonth + '-01').reduce((s, d) => s + byDay.get(d), 0));
+
+  const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const cells = DOW.map(d => `<div class="cal-dow"><span class="cal-full">${d}</span><span class="cal-short">${d[0]}</span></div>`);
+  for (let i = new Date(y, m - 1, 1).getDay(); i > 0; i--) cells.push('<div class="cal-day out"></div>');
+  const month = { net: 0, up: 0, down: 0, best: null, end: null };
+  for (let d = 1; d <= new Date(y, m, 0).getDate(); d++) {
+    const iso = `${calMonth}-${String(d).padStart(2, '0')}`;
+    const has = byDay.has(iso), pl = has ? cents(byDay.get(iso)) : 0;
+    bal = cents(bal + pl);
+    const isToday = iso === now ? 'today' : '';
+    if (iso > now || !days.length || iso < days[0]) {
+      cells.push(`<div class="cal-day empty ${isToday}"><span class="cal-date">${d}</span></div>`);
+      continue;
+    }
+    const kind = pl >= 0.005 ? 'up' : pl <= -0.005 ? 'down' : 'flat';
+    month.net = cents(month.net + pl);
+    if (kind === 'up') month.up++;
+    if (kind === 'down') month.down++;
+    if (has && (month.best == null || pl > month.best)) month.best = pl;
+    month.end = bal;
+    cells.push(`
+      <div class="cal-day ${kind} ${isToday}" title="${fmtDate(iso)}: ${has ? money(pl, true) : 'no bets'}. Balance ${money(bal)}">
+        <span class="cal-date">${d}</span>
+        <span class="cal-pl">${has ? calMoney(pl, true) : '—'}</span>
+        <span class="cal-bal">${calMoney(bal)}</span>
+      </div>`);
+  }
+
+  const name = new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  const color = n => n >= 0.005 ? 'profit' : n <= -0.005 ? 'loss' : 'muted';
+  $('#earningsCalendar').innerHTML = `
+    <div class="cal-head">
+      <div class="cal-nav">
+        <button type="button" class="btn tiny-btn ghost" data-cal="-1" ${calMonth <= firstMonth ? 'disabled' : ''} aria-label="Previous month">‹</button>
+        <h3>${name}</h3>
+        <button type="button" class="btn tiny-btn ghost" data-cal="1" ${calMonth >= now.slice(0, 7) ? 'disabled' : ''} aria-label="Next month">›</button>
+      </div>
+      ${calMonth !== now.slice(0, 7) ? '<button type="button" class="btn tiny-btn" data-cal="now">This month</button>' : ''}
+    </div>
+    <div class="cal-summary">
+      <div><small>Month P/L</small><b class="${color(month.net)}">${money(month.net, true)}</b></div>
+      <div><small>${calMonth === now.slice(0, 7) ? 'Balance today' : 'Balance at month end'}</small><b>${month.end == null ? '—' : money(month.end)}</b></div>
+      <div><small>Up / down days</small><b><span class="profit">${month.up}</span> / <span class="loss">${month.down}</span></b></div>
+      <div><small>Best day</small><b class="${month.best > 0 ? 'profit' : 'muted'}">${month.best == null ? '—' : money(month.best, true)}</b></div>
+    </div>
+    <div class="cal-grid">${cells.join('')}</div>
+    <p class="muted tiny cal-note">Small number: what you won or lost that day. Big number: your balance at the end of it, Basic and Exotic bets together.
+      ${days.length ? '' : 'Log a bet and its day shows up here.'}</p>`;
+}
+
+$('#earningsCalendar').addEventListener('click', e => {
+  const b = e.target.closest('[data-cal]');
+  if (!b || b.disabled) return;
+  if (b.dataset.cal === 'now') calMonth = today().slice(0, 7);
+  else {
+    const [y, m] = calMonth.split('-').map(Number);
+    const d = new Date(y, m - 1 + +b.dataset.cal, 1);
+    calMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  }
+  renderCalendar();
+});
+
+/* ----- List ----- */
 
 // Program numbers show as "#5" (or "#1A" for coupled entries); older bets saved a horse's name
 function horseLabel(h) { return /^\d+[A-Z]?$/i.test(String(h).trim()) ? '#' + String(h).trim().toUpperCase() : h; }
@@ -2560,6 +2663,17 @@ function accuracyOf(b) {
 }
 
 function renderHistory() {
+  const calendar = earningsView() === 'calendar';
+  $$('#earningsView [data-view]').forEach(b => {
+    const on = b.dataset.view === earningsView();
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-pressed', on);
+  });
+  $('#earningsCalendar').classList.toggle('hidden', !calendar);
+  $('#earningsList').classList.toggle('hidden', calendar);
+  $('#exportCsv').classList.toggle('hidden', calendar);
+  if (calendar) return renderCalendar();
+
   const rows = historyRows();
   const net = rows.reduce((s, b) => s + profitOf(b), 0);
   const decided = rows.filter(b => b.status === 'won' || b.status === 'lost');
@@ -2675,7 +2789,7 @@ $('#exportCsv').addEventListener('click', () => {
   const value = (b, c) => c === 'profit' ? profitOf(b).toFixed(2)
     : c === 'winners' ? (b.winners || []).join(betInfo(b.type) && betInfo(b.type).kind === 'horizontal' ? '/' : '-')
     : b[c] ?? '';
-  // This mode's bets, like the History table
+  // This mode's bets, like the Earnings list
   const lines = modeBets().map(b => cols.map(c => cell(value(b, c))).join(','));
   download(`mejiro-${isExotic() ? 'exotic' : 'basic'}-bets-${today()}.csv`, [cols.join(','), ...lines].join('\n'), 'text/csv');
 });

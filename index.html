@@ -53,7 +53,7 @@
         <button data-tab="exotic" class="only-exotic">Exotic Wagering</button>
         <button data-tab="strategies">Strategies</button>
         <button data-tab="matrix">Risk Matrix</button>
-        <button data-tab="history">History</button>
+        <button data-tab="history">Earnings</button>
         <button data-tab="settings">Settings</button>
       </nav>
       <div class="user-chip" id="userChip"></div>
@@ -222,30 +222,37 @@
         </div>
       </section>
 
-      <!-- ---------- HISTORY ---------- -->
+      <!-- ---------- EARNINGS (List: every bet; Calendar: balance at the end of each day) ---------- -->
       <section id="tab-history" class="tab">
         <header class="tab-head">
-          <h2>History</h2>
+          <h2>Earnings</h2>
           <div class="head-actions">
+            <div class="seg-group" id="earningsView" role="group" aria-label="View">
+              <button type="button" class="seg" data-view="list">List</button>
+              <button type="button" class="seg" data-view="calendar">Calendar</button>
+            </div>
             <button class="btn ghost" id="exportCsv">Export CSV</button>
           </div>
         </header>
-        <div class="toolbar">
-          <label>Track<select id="histTrack"><option value="">All tracks</option></select></label>
-          <label>Wager type<select id="histType"><option value="">All types</option></select></label>
-          <label>Result
-            <select id="histResult">
-              <option value="">All</option><option value="won">Won</option>
-              <option value="lost">Lost</option><option value="scratched">Scratched</option>
-              <option value="open">Pending</option>
-            </select>
-          </label>
-          <label>From<input type="date" id="histFrom"></label>
-          <label>To<input type="date" id="histTo"></label>
-        </div>
-        <div class="stats" id="histStats"></div>
-        <div class="card">
-          <div class="table-wrap"><table class="table" id="histTable"></table></div>
+        <div class="card hidden" id="earningsCalendar"></div>
+        <div id="earningsList">
+          <div class="toolbar">
+            <label>Track<select id="histTrack"><option value="">All tracks</option></select></label>
+            <label>Wager type<select id="histType"><option value="">All types</option></select></label>
+            <label>Result
+              <select id="histResult">
+                <option value="">All</option><option value="won">Won</option>
+                <option value="lost">Lost</option><option value="scratched">Scratched</option>
+                <option value="open">Pending</option>
+              </select>
+            </label>
+            <label>From<input type="date" id="histFrom"></label>
+            <label>To<input type="date" id="histTo"></label>
+          </div>
+          <div class="stats" id="histStats"></div>
+          <div class="card">
+            <div class="table-wrap"><table class="table" id="histTable"></table></div>
+          </div>
         </div>
       </section>
 

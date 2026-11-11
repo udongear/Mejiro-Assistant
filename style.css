@@ -578,3 +578,45 @@ input[type="date"] { color-scheme: dark; }
   .main { padding: 20px 16px 60px; }
   .toolbar label { width: calc(50% - 5px); }
 }
+
+/* ---------- Earnings calendar: a small day result over a big end-of-day balance ---------- */
+#earningsCalendar { container-type: inline-size; }
+.cal-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.cal-nav { display: flex; align-items: center; gap: 6px; }
+.cal-nav h3 { margin: 0; min-width: 160px; text-align: center; }
+.cal-nav .btn { font-size: 18px; line-height: 1; padding: 4px 12px; }
+.cal-nav .btn:disabled { opacity: .3; cursor: default; }
+.cal-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; margin-bottom: 14px; }
+.cal-summary > div { background: var(--surface-2); border-radius: 10px; padding: 8px 12px; }
+.cal-summary small { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+.cal-summary b { font: 600 17px/1.4 var(--display); font-variant-numeric: tabular-nums; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+.cal-dow { text-align: center; color: var(--muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; }
+.cal-day {
+  display: flex; flex-direction: column; align-items: flex-end; gap: 1px; min-width: 0; min-height: 80px; padding: 6px 8px;
+  border-radius: 10px; border: 1px solid transparent; background: var(--surface-2); font-variant-numeric: tabular-nums; overflow: hidden;
+}
+.cal-day.out { background: none; }
+.cal-day.empty { opacity: .4; }
+.cal-day.today { border-color: var(--violet); }
+.cal-date { align-self: flex-start; color: var(--muted); font-size: 12px; font-weight: 600; }
+.cal-pl { margin-top: auto; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.cal-bal { font: 600 16px/1.2 var(--display); white-space: nowrap; }
+/* Green = won money that day, red = lost, grey = no change or no bets (the balance carries over) */
+.cal-day.up { background: rgba(61, 220, 132, .08); }
+.cal-day.up .cal-pl, .cal-day.up .cal-bal { color: var(--profit); }
+.cal-day.down { background: rgba(255, 92, 108, .08); }
+.cal-day.down .cal-pl, .cal-day.down .cal-bal { color: var(--loss); }
+.cal-day.flat .cal-pl, .cal-day.flat .cal-bal { color: var(--muted); }
+.cal-note { margin: 12px 0 0; }
+/* Narrow calendar (phone, small window): short amounts like +$45 and $1.2k, one-letter weekdays */
+.cal-short { display: none; }
+@container (max-width: 640px) {
+  .cal-full { display: none; }
+  .cal-short { display: inline; }
+  .cal-grid { gap: 4px; }
+  .cal-day { min-height: 60px; padding: 4px 5px; border-radius: 8px; }
+  .cal-date { font-size: 10px; }
+  .cal-pl { font-size: 10px; }
+  .cal-bal { font-size: 13px; }
+}
