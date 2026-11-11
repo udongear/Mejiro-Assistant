@@ -53,7 +53,7 @@ function readLocalState() {
    users/{uid}/racecards/{date}    that day's races captured from TwinSpires (state.cards holds one day)
    save() is called after every change; it writes only what differs from the last sync. */
 
-const PREF_KEYS = ['mode', 'settings', 'matrix', 'wrRange', 'hrBet', 'strategies', 'strategyCategories', 'racesShown', 'exoticInfo', 'exoticField', 'exoticModel'];
+const PREF_KEYS = ['mode', 'settings', 'matrix', 'wrRange', 'hrBet', 'strategies', 'strategyCategories', 'racesShown', 'exoticInfo', 'exoticField', 'exoticModel', 'exoticBreeds'];
 
 let fb = null;  // { auth, db } once Firebase is set up
 let synced = { prefs: '', bets: new Map(), cards: '' };  // last known Firestore copy (bet id → JSON)
@@ -1070,6 +1070,7 @@ function renderRaces() {
       <b>${esc(d.name)}</b>${starsHTML(d.stars)}<span class="tile-desc">${esc(d.short)}</span>
       <span class="kind-tag ${d.kind}">${d.kind === 'vertical' ? 'Single Race' : 'Multiple Races'}</span></button>`).join('');
   renderModelToggle();
+  renderBreedFilter();
   if (isExotic() && tracks.length) renderExoticResults();
 
   const track = tracks.find(x => x.key === racesView.key);
@@ -1084,7 +1085,9 @@ function renderRaces() {
   const races = track.card ? track.card.races : {};
   const total = track.card && track.card.total;
   if (total && racesView.race > total) racesView.race = 1;
-  $('#racesTitle').textContent = `${track.name} · Race ${racesView.race}`;
+  // The race type, when the capture found one
+  const breed = races[racesView.race] && races[racesView.race].breed;
+  $('#racesTitle').textContent = `${track.name} · Race ${racesView.race}${breed ? ' · ' + breedName(breed) : ''}`;
   // Captured races are marked; races beyond the card's last race (when TwinSpires showed it) are greyed out
   $('#racePicker').innerHTML = Array.from({ length: MAX_RACES }, (_, i) => i + 1).map(n =>
     `<button type="button" class="seg ${n === racesView.race ? 'active' : ''} ${races[n] ? 'has-data' : ''}" data-race="${n}"
@@ -1211,6 +1214,8 @@ $('#exoticResults').addEventListener('keydown', e => {
    suggested; a race where they're over a third of the field is skipped. Scratches are removed.
    1 and 1A are one betting interest. A one-race wager is skipped unless the field (after scratches) is
    bigger than its places, as TwinSpires doesn't offer it otherwise: Superfecta needs 5+, Super High Five 6+.
+   Only the race types turned on under the model switch are searched (Thoroughbred until you change it);
+   a Pick run is left out if any of its races is a type that's off.
 
    ML Model (the toggle at the top of the Exotic Wagering tab) starts from the morning line instead,
    and keeps the steps above as a smaller second opinion:
@@ -1244,6 +1249,38 @@ $('#exoticModel').addEventListener('click', e => {
   state.exoticModel = b.dataset.model;
   save();
   renderModelToggle();
+  renderExoticResults();
+});
+
+// Race types the capture reads. A race whose type wasn't found (or captured before types were read)
+// counts as a Thoroughbred.
+const BREEDS = [['thoroughbred', 'Thoroughbred'], ['harness', 'Harness'], ['quarter', 'Quarter Horse']];
+const raceBreed = race => (BREEDS.some(([b]) => b === race.breed) ? race.breed : 'thoroughbred');
+const breedName = b => (BREEDS.find(([k]) => k === b) || [])[1] || '';
+
+// Which race types the top 10 is built from (under the model toggle); Thoroughbred until you change it
+const exoticBreeds = () => {
+  const on = Array.isArray(state.exoticBreeds) ? state.exoticBreeds.filter(b => BREEDS.some(([k]) => k === b)) : [];
+  return on.length ? on : ['thoroughbred'];
+};
+
+function renderBreedFilter() {
+  $$('#exoticBreeds [data-breed]').forEach(b => {
+    const on = exoticBreeds().includes(b.dataset.breed);
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-pressed', on);
+  });
+}
+
+$('#exoticBreeds').addEventListener('click', e => {
+  const b = e.target.closest('[data-breed]');
+  if (!b) return;
+  const on = exoticBreeds();
+  const next = on.includes(b.dataset.breed) ? on.filter(k => k !== b.dataset.breed) : [...on, b.dataset.breed];
+  if (!next.length) return;  // keep at least one on
+  state.exoticBreeds = BREEDS.map(([k]) => k).filter(k => next.includes(k));
+  save();
+  renderBreedFilter();
   renderExoticResults();
 });
 const PLAY_SVG = '<svg viewBox="0 0 24 24" width="22" height="22"><circle cx="12" cy="12" r="11" fill="currentColor"/><path d="M10 7.5v9l7-4.5z" fill="#0D0A14"/></svg>';
@@ -1373,17 +1410,24 @@ const fairOdds = p => { const o = (1 - p) / p; return (o < 10 ? +o.toFixed(1) : 
 
 let exoticPick = null;  // the wager whose top 10 shows under the tiles
 
-// The races a bet can use at a track: single races, or runs of consecutive races for Pick bets
-function calcOptions(track, bet, model) {
+// The races a bet can use at a track: single races, or runs of consecutive races for Pick bets.
+// A race of a type that's filtered out is `hidden` (a Pick run, if any of its races is).
+function calcOptions(track, bet, model, breeds) {
   const races = track.card.races;
   const nums = Object.keys(races).map(Number).sort((a, b) => a - b);
+  const shown = n => breeds.includes(raceBreed(races[n]));
   if (bet.kind === 'vertical') {
-    return nums.map(n => { const m = raceModel(races[n], bet.legs, model); return { n, label: `Race ${n}`, why: m.why, models: [m], nums: [n] }; });
+    return nums.map(n => {
+      if (!shown(n)) return { n, label: `Race ${n}`, hidden: true };
+      const m = raceModel(races[n], bet.legs, model);
+      return { n, label: `Race ${n}`, why: m.why, models: [m], nums: [n] };
+    });
   }
   const last = nums[nums.length - 1];
   return nums.filter(n => n + bet.legs - 1 <= last).map(n => {
     const legNums = Array.from({ length: bet.legs }, (_, i) => n + i);
     const label = `Races ${n}–${n + bet.legs - 1}`;
+    if (legNums.some(x => races[x] && !shown(x))) return { n, label, hidden: true };
     const missing = legNums.find(x => !races[x]);
     if (missing) return { n, label, why: `race ${missing} wasn't scraped` };
     const models = legNums.map(x => raceModel(races[x], 1, model));
@@ -1394,17 +1438,18 @@ function calcOptions(track, bet, model) {
 
 // Every race (or run of races, for Pick bets) scraped today, searched for the wager's most likely tickets.
 // Each race's own top 10 holds everything it could add to the day's top 10, so those are merged.
-function dayTopCombos(bet, model) {
+function dayTopCombos(bet, model, breeds) {
   const tracks = racesTracks(today());
   const found = [], skipped = [];
-  let searched = 0;
-  tracks.forEach(t => calcOptions(t, bet, model).forEach(o => {
+  let searched = 0, hidden = 0;
+  tracks.forEach(t => calcOptions(t, bet, model, breeds).forEach(o => {
+    if (o.hidden) return hidden++;
     if (o.why) return skipped.push({ track: t.name, label: o.label, why: o.why });
     searched++;
     const combos = bet.kind === 'horizontal' ? topHorizontal(o.models, o.nums) : topVertical(o.models[0], bet.legs);
     combos.forEach(c => found.push({ ...c, track: t.name, label: o.label }));
   }));
-  return { top: found.sort((a, b) => b.p - a.p).slice(0, CALC.results), searched, skipped, tracks: tracks.length };
+  return { top: found.sort((a, b) => b.p - a.p).slice(0, CALC.results), searched, skipped, hidden, tracks: tracks.length };
 }
 
 function renderExoticResults() {
@@ -1428,12 +1473,13 @@ function renderExoticResults() {
     box.innerHTML = `<p class="muted small-text xc-hint">Press a wager to see today's 10 most likely tickets across every scraped race.</p>`;
     return;
   }
-  // Recalculated only when the wager, the model or today's races change, so open sections stay open
-  const key = bet.name + '|' + model + '|' + JSON.stringify(state.cards && state.cards.tracks);
+  // Recalculated only when the wager, the model, the race types or today's races change, so open sections stay open
+  const breeds = exoticBreeds();
+  const key = [bet.name, model, breeds.join(','), JSON.stringify(state.cards && state.cards.tracks)].join('|');
   if (box.dataset.key === key) return;
   box.dataset.key = key;
 
-  const { top, searched, skipped, tracks } = dayTopCombos(bet, model);
+  const { top, searched, skipped, hidden, tracks } = dayTopCombos(bet, model, breeds);
   const horizontal = bet.kind === 'horizontal';
   const how = ml ? `
           <li>Each horse's morning line becomes its win chance (9/2 is 2 in 11), scaled so the field adds up to 100%. A coupled entry's line is split between its horses.</li>
@@ -1452,7 +1498,8 @@ function renderExoticResults() {
       <div class="xc-head">
         <h3>${esc(bet.name)}: today's top 10 <span class="kind-tag ${bet.kind}">${horizontal ? 'Multiple Races' : 'Single Race'}</span>
           <span class="model-tag">${ml ? 'ML Model' : 'Life Stat Model'}</span></h3>
-        <span class="muted small-text">Searched ${horizontal ? plural(searched, `run`) + ` of ${bet.legs} races` : plural(searched, 'race')} at ${plural(tracks, 'track')}</span>
+        <span class="muted small-text">Searched ${horizontal ? plural(searched, `run`) + ` of ${bet.legs} races` : plural(searched, 'race')} at ${plural(tracks, 'track')}${hidden
+          ? ` · ${plural(hidden, horizontal ? 'run' : 'race')} left out by race type` : ''}</span>
       </div>
       ${top.length ? `
         <ol class="xc-results">${top.map((r, i) => {
@@ -1472,6 +1519,9 @@ function renderExoticResults() {
         <p class="muted tiny xc-note">Chance of the ticket hitting, and its <b>fair odds</b>: it's only worth playing when TwinSpires' payout beats them.
           Runners with fewer than ${CALC.minStarts} starts are never suggested.
           Click a ticket to mark it: once for bet, again for unavailable, a third time to clear it.</p>`
+      : hidden && !searched && !skipped.length
+        ? `<p class="xc-empty">Every ${horizontal ? `run of ${bet.legs} races` : 'race'} scraped today is a race type you've left out.
+          Turn on more types under the model switch to include them.</p>`
       : `<p class="xc-empty">No ${horizontal ? `run of ${bet.legs} races in a row` : 'race'} scraped today has enough data for a ${esc(bet.name)}.
           ${horizontal ? `Every race in the run must be scraped, and most of its runners need ${CALC.minStarts}+ starts${ml ? ' and a morning line' : ''}.` : ''}</p>`}
       ${skipped.length ? `
@@ -1485,6 +1535,7 @@ function renderExoticResults() {
         </ol>
         <p>Runners with fewer than ${CALC.minStarts} starts still count against everyone's chances, but are never suggested. Races where they're more than a third of the field are skipped.
           ${horizontal ? '' : `So are races with ${bet.legs} or fewer runners left, since TwinSpires only offers a ${esc(bet.name)} when the field is bigger than that.`}
+          Only the race types turned on under the model switch are searched (${breeds.map(breedName).join(', ')}); a race whose type the capture couldn't find counts as Thoroughbred.
           ${ml ? 'So is any race where a runner has no morning line. The line is set before betting opens, so it doesn\'t know about late money or track changes (scratched horses are taken out either way).'
             : 'Career records are all it uses: switch to the ML Model to add the morning line.'}</p>
       </details>
@@ -1563,7 +1614,7 @@ async function importCapture(c) {
 // Puts one track's capture into state.cards (already the capture's day); null if it's unusable
 function mergeTrack(c) {
   const int = v => Math.max(0, Math.floor(+v) || 0);
-  const list = !c ? [] : Array.isArray(c.races) ? c.races : [{ race: c.race, entrants: c.entrants }];
+  const list = !c ? [] : Array.isArray(c.races) ? c.races : [{ race: c.race, entrants: c.entrants, breed: c.breed }];
   const races = list.filter(r => r && Array.isArray(r.entrants) && r.entrants.length && int(r.race) >= 1 && int(r.race) <= MAX_RACES);
   if (!c || !c.track || !races.length) return null;
   const key = trackKey(c.track);
@@ -1572,6 +1623,7 @@ function mergeTrack(c) {
   const capturedAt = c.capturedAt || new Date().toISOString();
   const cleaned = Object.fromEntries(races.map(r => [int(r.race), {
     capturedAt,
+    ...(BREEDS.some(([b]) => b === r.breed) ? { breed: r.breed } : {}),
     entrants: r.entrants.slice(0, 30).map((e, i) => ({
       pp: String(e.pp || i + 1).slice(0, 4),
       horse: String(e.horse || `Horse ${i + 1}`).slice(0, 60),
@@ -1645,14 +1697,15 @@ $('#exportCards').addEventListener('click', async () => {
     try { days = (await userDoc().collection('racecards').get()).docs.map(d => d.data()); }
     catch (err) { return toast("Couldn't load your captures: " + err.message); }
   }
-  // ml_odds is the morning line as odds to 1 (9/2 = 4.5): a spreadsheet would read "9/2" as a date
-  const cols = ['date', 'track', 'race', 'pp', 'horse', 'starts', 'wins', 'places', 'shows', 'ml_odds', 'scratched', 'captured_at'];
+  // ml_odds is the morning line as odds to 1 (9/2 = 4.5): a spreadsheet would read "9/2" as a date.
+  // race_type is blank when the capture couldn't find it.
+  const cols = ['date', 'track', 'race', 'race_type', 'pp', 'horse', 'starts', 'wins', 'places', 'shows', 'ml_odds', 'scratched', 'captured_at'];
   const cell = v => /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : v;
   const rows = [];
   days.sort((a, b) => a.date.localeCompare(b.date)).forEach(day =>
     Object.values(day.tracks || {}).sort((a, b) => a.name.localeCompare(b.name)).forEach(t =>
       Object.entries(t.races || {}).sort((a, b) => a[0] - b[0]).forEach(([n, r]) =>
-        r.entrants.forEach(e => rows.push([day.date, t.name, n, e.pp, e.horse, e.starts ?? '', e.wins ?? '',
+        r.entrants.forEach(e => rows.push([day.date, t.name, n, breedName(r.breed), e.pp, e.horse, e.starts ?? '', e.wins ?? '',
           e.places ?? '', e.shows ?? '', mlOdds(e.ml) ?? '', e.scratched ? 'yes' : '', r.capturedAt].map(cell).join(','))))));
   if (!rows.length) return toast('Nothing captured yet');
   download(`mejiro-race-cards-${today()}.csv`, [cols.join(','), ...rows].join('\n'), 'text/csv');
@@ -1778,19 +1831,32 @@ function mejiroCapture(site) {
 
   const texts = () => leaves().map(el => [el, clean(el.textContent)]).filter(([, t]) => t && t.length < 40);
   const raceNow = () => { const hit = texts().find(([, t]) => /^RACE\s*\d{1,2}$/i.test(t)); return hit ? +hit[1].match(/\d+/)[0] : 0; };
+  /* Race type: thoroughbred, harness or quarter (horse). From the address first (TwinSpires program addresses
+     name it, like ".../Thoroughbred/5/advanced"), else from a lone type label near the top of the page.
+     '' when neither says; the Today's Races list row is the fallback when capturing every track. */
+  const breedIn = s => /thoroughbred/i.test(s) ? 'thoroughbred' : /harness|standardbred/i.test(s) ? 'harness'
+    : /quarter[\s_-]*horse/i.test(s) ? 'quarter' : '';
+  const breedNow = () => {
+    const fromAddress = breedIn(location.pathname + location.hash);
+    if (fromAddress) return fromAddress;
+    const near = new Set(texts().filter(([el, t]) => /^(thoroughbred|harness|standardbred|quarter\s*horse)$/i.test(t)
+      && el.getBoundingClientRect().top < 400).map(([, t]) => breedIn(t)));
+    return near.size === 1 ? [...near][0] : '';
+  };
   /* The previous/next race buttons read "R7", "R9" */
   const raceButton = n => leaves().find(el => clean(el.textContent) === 'R' + n);
   const trackName = () => {
     const named = document.querySelector('.track-name');
     if (named && clean(named.textContent)) return clean(named.textContent);
-    const NAV = /^(PROGRAM|POOLS|PPS|STATS|RESULTS|VIDEO|CLASSIC|BASIC|ADVANCED|SPEED|CLASS|PACE|SUMMARY|TIPS|OFFICIAL|GLOSSARY|RUNNER|JOCKEY|TRAINER|ODDS|PL|RECORD|LIFE|SCR|NEW|FAQ)$/;
+    const NAV = /^(PROGRAM|POOLS|PPS|STATS|RESULTS|VIDEO|CLASSIC|BASIC|ADVANCED|SPEED|CLASS|PACE|SUMMARY|TIPS|OFFICIAL|GLOSSARY|RUNNER|JOCKEY|TRAINER|ODDS|PL|RECORD|LIFE|SCR|NEW|FAQ|THOROUGHBRED|HARNESS|STANDARDBRED|QUARTER ?HORSE|GREYHOUND)$/;
     const hit = texts().find(([el, t]) => /^[A-Z][A-Za-z .'&-]{2,34}$/.test(t) && !NAV.test(t.toUpperCase()) && !/^R(ACE)?\s*\d/i.test(t)
       && el.getBoundingClientRect().top < 250 && !el.closest('nav, header'));
     return hit ? hit[1] : '';
   };
 
   /* TwinSpires' Today's Races list (your filters apply): one row per track, with an id like
-     "featured-track-ind-race-10" (track code, the race it's on) and a badge with minutes to post, or OFFICIAL once that race is run */
+     "featured-track-ind-race-10" (track code, the race it's on) and a badge with minutes to post, or OFFICIAL once that race is run.
+     The row's race type, if anything in it (a link, an icon's class or title) names one */
   const listRows = () => {
     const found = new Map();
     document.querySelectorAll('.track-list--row[id*="-track-"]').forEach(row => {
@@ -1799,7 +1865,8 @@ function mejiroCapture(site) {
       if (!m || !nameEl || found.has(m[1])) return;  /* Featured tracks are listed twice */
       const badge = row.querySelector('.mtp-badge');
       const status = badge ? cellTexts(badge).join(' ') : '';
-      found.set(m[1], { code: m[1], name: clean(nameEl.textContent), race: +m[2], status, finished: /official/i.test(status) });
+      found.set(m[1], { code: m[1], name: clean(nameEl.textContent), race: +m[2], status, finished: /official/i.test(status),
+        breed: breedIn(row.outerHTML) });
     });
     return [...found.values()];
   };
@@ -1899,8 +1966,9 @@ function mejiroCapture(site) {
     return raceNow() === n;
   };
 
-  /* The track that's showing, from race `from` (1 for the whole card) forward until there's no next-race button */
-  const readCard = async (prefix, from) => {
+  /* The track that's showing, from race `from` (1 for the whole card) forward until there's no next-race button.
+     `breed` is the race type to fall back on when a race's page doesn't say (from the Today's Races list) */
+  const readCard = async (prefix, from, breed = '') => {
     const races = [];
     let n = raceNow() || 1;
     while (n > from) {
@@ -1916,7 +1984,7 @@ function mejiroCapture(site) {
     let total = null;
     while (races.length < 15) {
       const entrants = await readRace(`${prefix}Race ${n}: `);
-      if (entrants) races.push({ race: n, entrants });
+      if (entrants) races.push({ race: n, entrants, breed: breedNow() || breed });
       if (!raceButton(n + 1)) { total = n; break; }  /* no next-race button: this is the last race */
       if (stop) break;
       show(`${prefix}Opening Race ${n + 1}…`);
@@ -1948,6 +2016,16 @@ function mejiroCapture(site) {
       : '<div style="color:#FF5C6C">No morning lines found. Copy the page outline and paste it to Claude.</div>';
   };
 
+  /* The race types read, e.g. "Race types: 9 Thoroughbred, 2 Harness" */
+  const BREED_NAMES = { thoroughbred: 'Thoroughbred', harness: 'Harness', quarter: 'Quarter Horse' };
+  const typeLine = races => {
+    const count = {};
+    races.forEach(r => { count[r.breed || ''] = (count[r.breed || ''] || 0) + 1; });
+    const named = Object.keys(BREED_NAMES).filter(b => count[b]).map(b => `${count[b]} ${BREED_NAMES[b]}`);
+    return `<div>${named.length ? `Race type${races.length === 1 ? '' : 's'}: ${named.join(', ')}` : ''}` +
+      (count[''] ? `${named.length ? '; ' : ''}<span style="color:#FF5C6C">type not found for ${count['']} race${count[''] === 1 ? '' : 's'}</span> (counted as Thoroughbred)` : '') + '</div>';
+  };
+
   const doneAll = (cards, failed, over) => {
     running = false;
     const all = cards.flatMap(c => c.races.flatMap(r => r.entrants));
@@ -1955,7 +2033,7 @@ function mejiroCapture(site) {
     const noML = all.length && !all.some(e => e.ml);
     const list = cards.map(c => { const n = c.races.flatMap(r => r.entrants), f = n.filter(e => e.found).length;
       return `<b>${html(c.track)}</b>: ${c.races.length} race${c.races.length === 1 ? '' : 's'}, ${n.length} horse${n.length === 1 ? '' : 's'}` + (f < n.length ? ` <span style="color:#FF5C6C">(${n.length - f} without a record)</span>` : ''); });
-    show(`<div>Read ${found} of ${all.length} records across ${cards.length} tracks.</div>` + (all.length ? mlLine(all) : '') + note(list.join('<br>')) +
+    show(`<div>Read ${found} of ${all.length} records across ${cards.length} tracks.</div>` + (all.length ? mlLine(all) + typeLine(cards.flatMap(c => c.races)) : '') + note(list.join('<br>')) +
       (failed.length ? note(`<span style="color:#FF5C6C">Couldn't open: ${failed.map(html).join(', ')}</span>`) : '') +
       (over.length ? note(`Already finished for the day: ${over.map(html).join(', ')}`) : '') +
       (cards.length ? sendLink : '') + button('mc-close', 'Close') +
@@ -1977,7 +2055,7 @@ function mejiroCapture(site) {
           (e.ml ? ` · ML ${html(e.ml)}` : '')).join('<br>')
       : races.map(r => { const f = r.entrants.filter(e => e.found).length; return `Race ${r.race}: ${r.entrants.length} horses` +
           (f < r.entrants.length ? ` <span style="color:#FF5C6C">(${r.entrants.length - f} without a record)</span>` : ''); }).join('<br>');
-    show(`<div>Read ${found} of ${all.length} records${single ? '' : ` across ${races.length} races`}.</div>` + (all.length ? mlLine(all) : '') +
+    show(`<div>Read ${found} of ${all.length} records${single ? '' : ` across ${races.length} races`}.</div>` + (all.length ? mlLine(all) + typeLine(races) : '') +
       `<label style="display:block;margin-top:10px;font-size:12px;color:#9C92BC">Track<input id="mc-track" style="${field}" value="${html(track)}"></label>` +
       (single ? `<label style="display:block;margin-top:8px;font-size:12px;color:#9C92BC">Race<input id="mc-race" type="number" min="1" max="15" style="${field}" value="${races[0].race || ''}"></label>` : '') +
       note(list) + sendLink + button('mc-close', 'Close') +
@@ -2035,7 +2113,7 @@ function mejiroCapture(site) {
         if (upcoming && t.finished) { over.push(t.name); continue; }
         show(`${prefix}opening…`);
         if (!await openFromList(t)) { failed.push(t.name); continue; }
-        const { races, total } = await readCard(prefix, upcoming ? t.race : 1);
+        const { races, total } = await readCard(prefix, upcoming ? t.race : 1, t.breed);
         if (races.length) cards.push({ track: t.name, total, races });
         else failed.push(t.name);
       }
@@ -2062,7 +2140,7 @@ function mejiroCapture(site) {
   box.querySelector('#mc-close').onclick = finish;
   box.querySelector('#mc-one').onclick = async () => {
     const entrants = await readRace('');
-    done([{ race: start, entrants: entrants || [] }], track, null);
+    done([{ race: start, entrants: entrants || [], breed: breedNow() }], track, null);
   };
   box.querySelector('#mc-all').onclick = async () => {
     running = true;

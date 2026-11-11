@@ -366,6 +366,12 @@ input[type="date"] { color-scheme: dark; }
 .xc-panel.horizontal .xc-head h3 { color: #FFB3E6; }
 /* Which model built the top 10: Life Stat Model or ML Model (the toggle at the top of the tab) */
 .model-toggle .seg { padding: 7px 14px; font-size: 13px; }
+/* The model switch with the race-type filter right under it, on the right of the tab heading */
+.exotic-controls { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+.breed-filter { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
+.breed-filter .seg { padding: 5px 10px; background: var(--surface-2); border: 1px solid var(--border); }
+.breed-filter .seg.active { background: var(--lavender); border-color: var(--lavender); }
+@media (max-width: 640px) { .exotic-controls { align-items: flex-start; } .breed-filter { justify-content: flex-start; } }
 .model-tag { font: 600 11px var(--font); color: var(--lavender); background: rgba(200, 180, 255, .12); border: 1px solid rgba(200, 180, 255, .4); padding: 2px 8px; border-radius: 999px; }
 .xc-results { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .xc-row { display: grid; grid-template-columns: 26px 170px 1fr auto; align-items: center; gap: 12px; padding: 9px 12px; border-radius: 10px; background: var(--surface-2); }

@@ -132,10 +132,18 @@
       <section id="tab-exotic" class="tab">
         <header class="tab-head">
           <h2>Exotic Wagering</h2>
-          <!-- Which numbers the top 10 is built from (see "ML Model" in scripts.js) -->
-          <div class="seg-group model-toggle" id="exoticModel" role="group" aria-label="Model">
-            <button type="button" class="seg" data-model="life" title="Career records only">Life Stat Model</button>
-            <button type="button" class="seg" data-model="ml" title="Morning-line odds, with career records as a second opinion">ML Model</button>
+          <div class="exotic-controls">
+            <!-- Which numbers the top 10 is built from (see "ML Model" in scripts.js) -->
+            <div class="seg-group model-toggle" id="exoticModel" role="group" aria-label="Model">
+              <button type="button" class="seg" data-model="life" title="Career records only">Life Stat Model</button>
+              <button type="button" class="seg" data-model="ml" title="Morning-line odds, with career records as a second opinion">ML Model</button>
+            </div>
+            <!-- Which race types it searches; turn on as many as you like -->
+            <div class="breed-filter" id="exoticBreeds" role="group" aria-label="Race types">
+              <button type="button" class="seg" data-breed="thoroughbred">Thoroughbred</button>
+              <button type="button" class="seg" data-breed="harness">Harness</button>
+              <button type="button" class="seg" data-breed="quarter">Quarter Horse</button>
+            </div>
           </div>
         </header>
         <!-- Until today's tracks are scraped there's nothing to calculate from -->
