@@ -776,8 +776,14 @@ $('#betForm').addEventListener('submit', e => {
 
 /* ----- Import from TwinSpires: its account history CSV (Date, Time, Type, Track, Race, Pool, Base,
    Runners, Debit, Credit) fills in rows to check and log. One line is one ticket; Runners read like
-   "4,WT,5", where WT ("with") separates the places, or the races of a Pick bet. A Win / Place / Show
-   ticket on several horses ("1,7": Base $10, Debit $20) becomes one bet per horse, each for the Base. ----- */
+   "4,WT,5", where WT ("with") separates the places, or the races of a Pick bet, and a comma inside a
+   place means several horses there. A ticket with several horses in a spot becomes one bet per
+   combination it covers, each for the Base:
+     Show "1,7"                   → #1, #7                          (2 bets)
+     Superfecta "3 / 6 / 2 / 1,5" → 3-6-2-1, 3-6-2-5                 (2)
+     Trifecta "3,6 / 3,6 / 2"     → 3-6-2, 6-3-2                     (2: one horse can't finish 1st and 2nd)
+     Pick 3 "3 / 3 / 6,7"         → 3/3/6, 3/3/7                     (2: the same number can win different races)
+   That's how TwinSpires counts them too: the Debit is the Base × the combinations. ----- */
 
 // Quoted fields can hold commas ("4,WT,5")
 function parseCSV(text) {
@@ -825,20 +831,28 @@ function readTwinSpiresCSV(text) {
       track: get(r, 'track'), race: get(r, 'race'), pool: get(r, 'pool'), type,
     };
 
-    // Win / Place / Show on several horses at once: one bet per horse, each for the Base. The Credit is the
-    // whole ticket's return and doesn't say which horse paid, so the bets are Lost when nothing came back,
-    // Scratched when it all came back, and otherwise left for you to settle (`split` carries the totals).
-    const horses = legs.length === 1 ? legs[0] : [];
-    if (spec && spec.legs === 1 && horses.length > 1 && horses.every(h => /^\d+$/.test(h))) {
-      const stake = base > 0 && Math.abs(base * horses.length - debit) < 0.005 ? base : debit / horses.length;
+    // Every combination the ticket covers: one horse from each place (or race), and in one race a horse
+    // can't take two places. null when the runners don't fit the bet (or aren't all program numbers).
+    const combos = spec && legs.length === spec.legs && legs.every(l => l.length && l.every(h => /^\d+$/.test(h)))
+      ? legs.reduce((acc, leg) => acc.flatMap(c => leg.map(Number)
+          .filter(h => spec.kind === 'horizontal' || !c.includes(h)).map(h => [...c, h])), [[]])
+      : null;
+    const runners = legs.map(l => l.join(',')).join(' / ');
+
+    // Several combinations: one bet each, for the Base. The Credit is the whole ticket's return and doesn't say
+    // which combination paid, so the bets are Lost when nothing came back, Scratched when it all came back,
+    // and otherwise left for you to settle (`split` carries the ticket's totals for the import note).
+    if (combos && combos.length > 1 && combos.length <= MAX_SPLIT) {
+      const stake = base > 0 && Math.abs(base * combos.length - debit) < 0.005 ? base : debit / combos.length;
       const result = credit === 0 ? 'lost' : Math.abs(credit - debit) < 0.005 ? 'scratched' : '';
-      return horses.map(h => ({ ...ticket, picks: [+h], stake, result, payout: 0, split: { line, horses: horses.map(Number), debit, credit } }));
+      return combos.map(picks => ({ ...ticket, picks, stake, result, payout: 0, split: { line, runners, count: combos.length, debit, credit } }));
     }
 
     return [{
       ...ticket,
-      // One horse per place or race; anything else (a box, several horses in a spot) is left for you to pick
-      picks: spec && legs.length === spec.legs && legs.every(l => l.length === 1 && /^\d+$/.test(l[0])) ? legs.map(l => +l[0]) : [],
+      // One horse per place or race; a ticket too big to split is left for you to pick
+      picks: combos && combos.length === 1 ? combos[0] : [],
+      ...(combos && combos.length > MAX_SPLIT ? { tooBig: { runners, count: combos.length } } : {}),
       stake: debit,
       // Nothing back = lost; exactly the stake back = a scratch refund; more = a win, Credit being the total return
       result: credit === 0 ? 'lost' : Math.abs(credit - debit) < 0.005 ? 'scratched' : 'won',
@@ -846,6 +860,9 @@ function readTwinSpiresCSV(text) {
     }];
   });
 }
+
+// A ticket splits into at most this many bets; a bigger one (a wide box) stays one row for you to fill in
+const MAX_SPLIT = 60;
 
 $('#importCsv').addEventListener('change', async e => {
   const file = e.target.files[0];
@@ -885,18 +902,22 @@ $('#importCsv').addEventListener('change', async e => {
 
   // What was filled in, and what wasn't
   const unknown = [...new Set(all.filter(b => !b.type).map(b => b.pool || 'unknown'))];
-  const needPicks = fresh.filter(b => !b.picks.length).length;
   const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
-  // Win / Place / Show tickets on several horses, one per CSV line, and the ones whose result is up to you
+  // Tickets with several horses in a spot (one entry per CSV line), and the ones whose result is up to you
   const splits = [...new Map(fresh.filter(b => b.split).map(b => [b.split.line, b])).values()];
   const unsettled = splits.filter(b => !b.result);
+  const splitBets = fresh.filter(b => b.split).length;
+  // One-row tickets still missing their horses: too many combinations to split, or runners that don't fit the bet
+  const tooBig = fresh.filter(b => b.tooBig);
+  const needPicks = fresh.filter(b => !b.picks.length && !b.tooBig).length;
   const notes = [
     fresh.length ? `Filled in ${plural(fresh.length, 'bet')} from TwinSpires. Check them, add anything missing${fresh.some(b => isExoticType(b.type) && b.result === 'lost') ? ' (like Actual winners for lost exotics)' : ''}, then log.` : 'No new bets to fill in.',
-    splits.length ? `${plural(splits.length, 'ticket')} on several horses ${splits.length === 1 ? 'was' : 'were'} split into one bet per horse.` : '',
-    ...unsettled.map(b => `${b.track} R${b.race} ${b.type} on #${b.split.horses.join(' and #')}: ${money(b.split.credit)} back on ${money(b.split.debit)}. ` +
-      'TwinSpires doesn\'t say which horse paid, so set each one\'s Result and Total return.'),
+    splits.length ? `${plural(splits.length, 'ticket')} with several horses in a spot ${splits.length === 1 ? 'was' : 'were'} split into one bet per combination (${plural(splitBets, 'bet')}).` : '',
+    ...unsettled.map(b => `${b.track} R${b.race} ${b.type} (${b.split.runners}, ${plural(b.split.count, 'combination')}): ${money(b.split.credit)} back on ${money(b.split.debit)}. ` +
+      'TwinSpires doesn\'t say which combination paid, so set each one\'s Result and Total return.'),
+    ...tooBig.map(b => `${b.track} R${b.race} ${b.type} (${b.tooBig.runners}) covers ${b.tooBig.count} combinations, more than ${MAX_SPLIT}, so it's one row: pick its Horse # yourself.`),
     mine.length > fresh.length ? `${plural(mine.length - fresh.length, 'bet')} already logged, so left out.` : '',
-    needPicks ? `${plural(needPicks, 'bet')} used several horses in a spot (a box or key), so pick ${needPicks === 1 ? 'its' : 'their'} Horse # yourself.` : '',
+    needPicks ? `${plural(needPicks, 'bet')} had runners that don't fit the bet type, so pick ${needPicks === 1 ? 'its' : 'their'} Horse # yourself.` : '',
     unknown.length ? `Not tracked here: ${unknown.map(esc).join(', ')}.` : '',
     fresh.some(b => b.result === 'lost') ? 'Bets that paid nothing are set to Lost; change any race that hasn\'t run yet.' : '',
   ].filter(Boolean);
