@@ -414,7 +414,9 @@ input[type="date"] { color-scheme: dark; }
 .accuracy { display: inline-block; min-width: 44px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--text); }
 .accuracy.full { color: var(--profit); }
 .accuracy.half { color: #FFD84D; }
-.accuracy + small { font-size: 11px; }
+.accuracy ~ small { font-size: 11px; }
+/* A lost one-race exotic with every horse in, just in the wrong order: a red X after its "X of X" */
+.order-x { display: inline-flex; vertical-align: -2px; margin-left: 5px; color: var(--loss); cursor: help; }
 /* Exotic History holds two rows of saddle cloths, so its cells sit a little closer */
 #histTable td, #histTable th { padding-left: 7px; padding-right: 7px; }
 .import-note { margin: 10px 0 0; padding: 9px 12px; border-radius: 9px; font-size: 13px; line-height: 1.6;

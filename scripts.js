@@ -1177,6 +1177,7 @@ $('#exoticCard').addEventListener('click', e => {
 const ticketKey = (bet, r) => [bet.name, r.track, r.label, r.legs.map(l => l.num).join('-')].join('|');
 const CHECK_SVG = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const BLOCKED_SVG = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2.5"/><path d="M6 6l12 12" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>';
+const X_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"/></svg>';
 const TICKET_MARKS = {
   '': { icon: '', next: 'played', title: 'Click to mark that you bet this' },
   played: { icon: CHECK_SVG, next: 'unavailable', title: 'Marked as bet. Click to mark it unavailable' },
@@ -2606,8 +2607,11 @@ function renderHistory() {
     const a = accuracyOf(b);
     if (!a) return `<td class="muted" ${b.status === 'lost' && betInfo(b.type) ? 'title="Add the actual winners to see how close it was"' : ''}>—</td>`;
     const pct = a.hits / a.legs;
+    // Every horse came in but the bet still lost: a one-race exotic in the wrong order
+    const wrongOrder = pct === 1 && b.status === 'lost' && betInfo(b.type).kind === 'vertical';
     return `<td><span class="accuracy ${pct === 1 ? 'full' : pct >= 0.5 ? 'half' : ''}">${Math.round(pct * 100)}%</span>
-      <small class="muted">${a.hits} of ${a.legs}</small></td>`;
+      <small class="muted">${a.hits} of ${a.legs}</small>${wrongOrder
+      ? `<span class="order-x" role="img" aria-label="Incorrect order" title="Incorrect order">${X_SVG}</span>` : ''}</td>`;
   };
   // Picks show as saddle cloths, to line up with the actual winners; anything else (older bets) as typed
   const horseCell = b => {
