@@ -685,7 +685,7 @@ $('#addBetRow').addEventListener('click', () => {
   row.querySelector(['date', 'track', 'race'].map(n => `[name=${n}]`).find(s => !row.querySelector(s).value) || '[name=race]').focus();
 });
 
-// Exotic stake starts at the wager's target wager (above its tile on Exotic Wagering; the min bet until you set one).
+// Exotic stake starts at the wager's target wager (More Info's Wager column, shown above its tile).
 // It follows the bet type until you type your own amount.
 function autofillStake(tr) {
   const stake = tr.querySelector('[name=stake]');
@@ -1055,11 +1055,10 @@ function renderRaces() {
   // Each shows today's 10 most likely tickets for that wager underneath; above it is its target wager.
   $('#exoticTiles').innerHTML = [...EXOTIC_INFO].sort((a, b) => a.stars - b.stars).map(d => `
     <div class="exotic-slot">
-      <label class="target-wager ${d.kind}" title="How much you mean to stake on each ${esc(d.name)}. Log bets fills it in as the stake.">
+      <div class="target-wager ${d.kind}" title="How much you mean to stake on each ${esc(d.name)}. Change it in More Info → Edit numbers.">
         <span>Target wager</span>
-        <span class="target-input">$<input type="number" min="0" step="0.01" inputmode="decimal" data-target="${esc(d.name)}"
-          value="${+exoticTarget(d.name).toFixed(2)}" aria-label="${esc(d.name)} target wager"></span>
-      </label>
+        <b class="target-amount">${money(exoticTarget(d.name))}</b>
+      </div>
       <button type="button" class="exotic-tile ${d.kind}" data-calc="${esc(d.name)}" title="Today's 10 most likely ${esc(d.name)} tickets">
         <span class="tile-play" aria-hidden="true">${PLAY_SVG}</span>
         <b>${esc(d.name)}</b>${starsHTML(d.stars)}<span class="tile-desc">${esc(d.short)}</span>
@@ -1155,18 +1154,6 @@ $('#exoticCard').addEventListener('click', e => {
   if (!tile) return;
   exoticPick = exoticPick === tile.dataset.calc ? null : tile.dataset.calc;
   renderExoticResults();
-});
-
-// A target wager is saved once you leave its box; emptied, it goes back to the wager's min bet
-$('#exoticTiles').addEventListener('change', e => {
-  const inp = e.target.closest('[data-target]');
-  if (!inp) return;
-  const targets = { ...(state.exoticTargets || {}) };
-  if (inp.value === '') delete targets[inp.dataset.target];
-  else targets[inp.dataset.target] = Math.max(0, num(inp.value));
-  state.exoticTargets = targets;
-  save();
-  inp.value = +exoticTarget(inp.dataset.target).toFixed(2);
 });
 
 /* Clicking a top-10 ticket cycles its mark: none (its rank) → bet (green check, tinted green)
@@ -2275,12 +2262,13 @@ function openTierEditor() {
 
 $('#editTiers').addEventListener('click', openTierEditor);
 
-/* ----- Exotic wagers at a glance: a sortable reference table. Difficulty is a fixed 1–6 ranking
-   (no two bets share one); min bet and average payout start as ballpark defaults you can edit.
-     ROI               = average payout ÷ min bet
+/* ----- Exotic wagers at a glance (Exotic Wagering → More Info): a sortable reference table. Difficulty
+   is a fixed 1–6 ranking (no two bets share one). Wager is your target wager for each bet, shown above
+   its tile: it starts at the bet's minimum and, like the average payout, is yours to change (Edit numbers).
+     ROI               = average payout ÷ wager
      Possible outcomes = every result with N horses per race: N×(N−1)×… for a vertical bet's
                          `legs` places, N^legs for a horizontal bet's `legs` races
-     Break-even        = how often a min-bet ticket must hit to pay for itself: 1 in ROI ----- */
+     Break-even        = how often a ticket at your wager must hit to pay for itself: 1 in ROI ----- */
 
 const STAR_MAX = 6;
 const starsHTML = n => `<span class="stars" title="${n} of ${STAR_MAX}" aria-label="${n} of ${STAR_MAX} stars">${'★'.repeat(n)}<span class="off">${'★'.repeat(STAR_MAX - n)}</span></span>`;
@@ -2301,9 +2289,10 @@ const EXOTIC_INFO = [
     about: 'Pick the winners of 5 races in a row on one ticket. When nobody hits all five, the pool often carries over to the next day, which is how the big payouts build.' },
 ];
 const EXOTIC_COLS = [
-  ['name', 'Bet name'], ['stars', 'Difficulty to land'], ['min', 'Min bet'], ['payout', 'Avg payout'], ['roi', 'ROI (payout ÷ min bet)'],
+  ['name', 'Bet name'], ['stars', 'Difficulty to land'], ['min', 'Wager', 'Your target wager, shown above the bet\'s tile'],
+  ['payout', 'Avg payout'], ['roi', 'ROI (payout ÷ wager)'],
   ['outcomes', 'Possible outcomes', 'Every possible result with this many horses in each race'],
-  ['breakeven', 'Break-even', 'How often a min-bet ticket has to hit to pay for itself at the average payout'],
+  ['breakeven', 'Break-even', 'How often a ticket at your wager has to hit to pay for itself at the average payout'],
 ];
 let exoticSort = { key: 'stars', dir: 1 };
 let exoticEditing = false;
@@ -2314,18 +2303,18 @@ const outcomes = (kind, legs, n) => kind === 'vertical'
   ? Array.from({ length: legs }, (_, i) => n - i).reduce((p, x) => p * Math.max(0, x), 1)
   : n ** legs;
 
+// `min` holds the Wager column (it began as the min bet, which is still its starting value). Targets
+// typed on the tiles before they moved here (state.exoticTargets) count until you edit that wager.
 const exoticRows = () => EXOTIC_INFO.map(d => {
   const mine = (state.exoticInfo || {})[d.name] || {};
-  const min = mine.min ?? d.min, payout = mine.payout ?? d.payout;
+  const min = mine.min ?? (state.exoticTargets || {})[d.name] ?? d.min, payout = mine.payout ?? d.payout;
   const roi = min > 0 ? payout / min : 0;
   return { ...d, min, payout, roi, outcomes: outcomes(d.kind, d.legs, fieldSize()), breakeven: roi ? 1 / roi : Infinity };
 });
 
-// Target wager: how much you mean to stake on each exotic (above its tile on Exotic Wagering; raise it as
-// your bankroll grows). Until you set one, it's the wager's min bet from this table, your edits included.
+// Target wager: how much you mean to stake on each exotic, shown above its tile on Exotic Wagering and
+// filled in as the stake in Log bets. It's this table's Wager column (More Info → Edit numbers).
 const exoticTarget = name => {
-  const mine = (state.exoticTargets || {})[name];
-  if (mine != null) return mine;
   const row = exoticRows().find(r => r.name === name);
   return row ? row.min : 0;
 };
@@ -2338,7 +2327,7 @@ function renderExoticTable() {
   const top = Math.log10(Math.max(10, ...rows.map(r => r.roi)));
   const pct = v => v >= 0.01 ? (v * 100).toFixed(1) + '%' : (v * 100).toFixed(2) + '%';
   const field = (r, f) => exoticEditing
-    ? `<input type="number" class="w-sm" min="0" step="0.01" data-exotic="${esc(r.name)}" data-field="${f}" value="${r[f]}" aria-label="${esc(r.name)} ${f === 'min' ? 'min bet' : 'average payout'}">`
+    ? `<input type="number" class="w-sm" min="0" step="0.01" data-exotic="${esc(r.name)}" data-field="${f}" value="${r[f]}" aria-label="${esc(r.name)} ${f === 'min' ? 'wager' : 'average payout'}">`
     : money(r[f]);
   $('#exoticTable').innerHTML = `
     <thead><tr>${EXOTIC_COLS.map(([k, label, hint]) => `
@@ -2390,7 +2379,7 @@ $('#exoticTable').addEventListener('change', e => {
   state.exoticInfo = info;
   save();
   renderExoticTable();
-  renderRaces();  // target wagers you haven't set follow the min bet
+  renderRaces();  // the tiles show the Wager column as their target wager
 });
 
 $('#exoticField').addEventListener('change', e => {
@@ -2402,8 +2391,9 @@ $('#exoticField').addEventListener('change', e => {
 $('#exoticEdit').addEventListener('click', () => { exoticEditing = !exoticEditing; renderExoticTable(); });
 
 $('#exoticReset').addEventListener('click', async () => {
-  if (!await confirmModal('Reset exotic wager numbers?', 'Restores the ballpark min bets and average payouts.', 'Reset')) return;
+  if (!await confirmModal('Reset exotic wager numbers?', "Puts each wager back to the bet's minimum and the payouts back to the ballpark estimates.", 'Reset')) return;
   state.exoticInfo = {};
+  state.exoticTargets = {};
   save();
   renderExoticTable();
   renderRaces();

@@ -308,13 +308,12 @@ input[type="date"] { color-scheme: dark; }
 .exotic-slot .exotic-tile { flex: 1; }
 .target-wager {
   display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 4px 6px; padding: 6px 8px 6px 10px;
-  border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border); cursor: text;
+  border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border);
   color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase;
 }
 .target-wager.vertical { border-left: 3px solid #4FD1E5; }
 .target-wager.horizontal { border-left: 3px solid #FFB3E6; }
-.target-input { display: inline-flex; align-items: center; gap: 3px; color: var(--text); font-size: 14px; letter-spacing: 0; }
-.target-input input { width: 70px; padding: 4px 6px; border-radius: 7px; text-align: right; font: 600 14px var(--font); }
+.target-amount { color: var(--text); font: 600 14px var(--font); letter-spacing: 0; text-transform: none; font-variant-numeric: tabular-nums; }
 .exotic-tile {
   position: relative; display: flex; flex-direction: column; gap: 4px; padding: 14px; border-radius: 10px; text-align: left;
   background: var(--surface-2); border: 1px solid var(--border); color: var(--text); font: inherit; cursor: pointer;
