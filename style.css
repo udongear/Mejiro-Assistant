@@ -173,10 +173,10 @@ input[type="date"] { color-scheme: dark; }
 .stat.balance .value { color: #22A05A; }
 .stat .stake-value { color: #FFD84D; }
 
-/* Tracker: win rate */
+/* Tracker: hit rate */
 .winrate-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
 .winrate-head h3 { margin: 0; color: var(--muted); font-size: 12px; font-weight: 500; text-transform: uppercase; letter-spacing: .06em; }
-/* All Time, WPS and the exotic wagers: three groups of buttons side by side, wrapping on small screens */
+/* All Time; Win, Place and Show; the exotic wagers: three groups of buttons side by side, wrapping on small screens */
 .rate-groups { display: flex; flex-wrap: wrap; gap: 8px; }
 .winrate-value { font: 700 56px/1.1 var(--display); color: var(--lavender); margin: 10px 0 12px; font-variant-numeric: tabular-nums; }
 .winrate-bar { height: 8px; border-radius: 999px; background: rgba(255, 92, 108, .25); overflow: hidden; margin-bottom: 10px; }
@@ -186,12 +186,19 @@ input[type="date"] { color-scheme: dark; }
 .seg { border: 0; background: none; color: var(--muted); font: 600 12px var(--font); padding: 6px 12px; border-radius: 7px; cursor: pointer; }
 .seg:hover { color: var(--text); }
 .seg.active { background: var(--lavender); color: var(--black); }
-/* Exotic hit rate: each wager's button carries its own rate; best in green, worst in red */
+/* Each button carries its own hit rate under its name */
 .hr-seg { display: inline-flex; flex-direction: column; align-items: center; gap: 1px; padding: 5px 10px; line-height: 1.2; }
 .hr-seg small { font-size: 11px; font-weight: 700; opacity: .75; }
-.hr-seg small.hi { color: var(--profit); opacity: 1; }
-.hr-seg small.lo { color: var(--loss); opacity: 1; }
-.hr-seg.active small { color: var(--black); }
+/* Every wager's hit rate: red at 0%, yellow up to 50%, green above 50% */
+.rate-zero { color: var(--loss); }
+.rate-mid { color: #FFD84D; }
+.rate-high { color: var(--profit); }
+.hr-seg small.rate-zero, .hr-seg small.rate-mid, .hr-seg small.rate-high { opacity: 1; }
+/* On the selected (lavender) button the rate sits on a dark pill, so its color still shows */
+.hr-seg.active small { padding: 0 6px; border-radius: 999px; background: var(--black); color: var(--muted); opacity: 1; }
+.hr-seg.active small.rate-zero { color: var(--loss); }
+.hr-seg.active small.rate-mid { color: #FFD84D; }
+.hr-seg.active small.rate-high { color: var(--profit); }
 
 /* Today's Races: tracks | entrants | percentages */
 .races-layout { display: grid; grid-template-columns: minmax(200px, 240px) minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
@@ -523,7 +530,7 @@ input[type="date"] { color-scheme: dark; }
 .modal-card.wide { max-width: 640px; }
 /* A confirmation (like Reset's) opens above the More Info popup */
 #modal { z-index: 55; }
-#exoticInfoModal .modal-card { max-width: 1000px; }
+#exoticInfoModal .modal-card { max-width: 1000px; max-height: min(calc(90vh + 50px), calc(100vh - 32px)); }
 .card-head-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .tier-table input { width: 130px; padding: 7px 9px; }
 .tier-table td { padding: 6px 8px; }

@@ -415,10 +415,10 @@ function renderTrackSelects() {
    Tracker
    ========================================================= */
 
-/* ----- Win / hit rates: three groups of buttons in one card. All Time (every bet), WPS (Win, Place and
-   Show together), then each exotic wager. Rate = won ÷ (won + lost), all time; scratches and pending bets
-   don't count. It's a win rate for All Time and WPS, a hit rate for the exotics. Each button shows its
-   own rate; among the exotics the best is green and the worst red, so they compare at a glance. ----- */
+/* ----- Hit rates: three groups of buttons in one card. All Time (every bet), then Win, Place and Show,
+   then each exotic wager. Hit rate = won ÷ (won + lost), all time; scratches and pending bets don't
+   count. Each button shows its own rate, colored the same way for every wager: red at 0%, yellow up to
+   50%, green above 50% (grey when nothing's settled yet). ----- */
 
 const WPS_TYPES = ['Win', 'Place', 'Show'];
 
@@ -428,40 +428,33 @@ function rateOf(bets) {
   return { won, lost, scratched: count('scratched'), rate: won + lost ? won / (won + lost) * 100 : null };
 }
 
+const rateClass = r => (r == null ? '' : r === 0 ? 'rate-zero' : r <= 50 ? 'rate-mid' : 'rate-high');
+
 function renderWinRate() {
   const exotics = [...EXOTIC_INFO].sort((a, b) => a.stars - b.stars).map(d => d.name);
   const stats = {
     all: rateOf(state.bets),
-    wps: rateOf(state.bets.filter(b => WPS_TYPES.includes(b.type))),
-    ...Object.fromEntries(exotics.map(t => [t, rateOf(state.bets.filter(b => b.type === t))])),
+    ...Object.fromEntries([...WPS_TYPES, ...exotics].map(t => [t, rateOf(state.bets.filter(b => b.type === t))])),
   };
   const pick = stats[state.rateView] ? state.rateView : 'all';
-  const exotic = exotics.includes(pick);
-  const rates = exotics.map(t => stats[t].rate).filter(r => r != null);
-  const hi = Math.max(...rates), lo = Math.min(...rates);
-  const mark = t => {
-    const r = stats[t].rate;
-    return !exotics.includes(t) || r == null || rates.length < 2 || hi === lo ? '' : r === hi ? 'hi' : r === lo ? 'lo' : '';
-  };
   const pct = r => (r == null ? '—' : +r.toFixed(1) + '%');
   const seg = (key, label) => `<button type="button" class="seg hr-seg ${key === pick ? 'active' : ''}" data-rate="${esc(key)}">${esc(label)}
-    <small class="${mark(key)}">${pct(stats[key].rate)}</small></button>`;
+    <small class="${rateClass(stats[key].rate)}">${pct(stats[key].rate)}</small></button>`;
   const s = stats[pick];
-  const what = pick === 'all' ? 'all bets' : pick === 'wps' ? 'Win, Place and Show' : pick;
   $('#winRate').innerHTML = `
     <div class="winrate-head">
-      <h3>${exotic ? 'Hit rate' : 'Win rate'}</h3>
+      <h3>Hit rate</h3>
       <div class="rate-groups">
         <div class="seg-group">${seg('all', 'All Time')}</div>
-        <div class="seg-group">${seg('wps', 'WPS')}</div>
+        <div class="seg-group">${WPS_TYPES.map(t => seg(t, t)).join('')}</div>
         <div class="seg-group">${exotics.map(t => seg(t, t)).join('')}</div>
       </div>
     </div>
-    <div class="winrate-value">${pct(s.rate)}</div>
+    <div class="winrate-value ${rateClass(s.rate)}">${pct(s.rate)}</div>
     <div class="winrate-bar"><span style="width:${s.rate || 0}%"></span></div>
     <div class="sub">${s.won + s.lost
-      ? `<span class="profit">${s.won} ${exotic ? 'hit' : 'won'}</span> · <span class="loss">${s.lost} ${exotic ? 'missed' : 'lost'}</span>${s.scratched ? ` · ${s.scratched} scratched` : ''} · ${esc(what)}, all time`
-      : `No settled ${pick === 'all' ? '' : esc(what) + ' '}bets yet`}</div>`;
+      ? `<span class="profit">${s.won} hit</span> · <span class="loss">${s.lost} missed</span>${s.scratched ? ` · ${s.scratched} scratched` : ''} · ${pick === 'all' ? 'all bets' : esc(pick)}, all time`
+      : `No settled ${pick === 'all' ? '' : esc(pick) + ' '}bets yet`}</div>`;
 }
 
 $('#winRate').addEventListener('click', e => {
