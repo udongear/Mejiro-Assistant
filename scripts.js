@@ -52,7 +52,7 @@ function readLocalState() {
 
 // strategies and strategyCategories are notes from the old Strategies tab: no longer shown, but kept
 // (the prefs document is rewritten whole on save, so dropping them here would delete them)
-const PREF_KEYS = ['settings', 'matrix', 'rateView', 'strategies', 'strategyCategories', 'racesShown', 'exoticInfo', 'exoticField', 'exoticModel', 'exoticBreeds', 'earningsView'];
+const PREF_KEYS = ['settings', 'matrix', 'rateView', 'strategies', 'strategyCategories', 'racesShown', 'exoticInfo', 'exoticField', 'exoticModel', 'exoticBreeds', 'exoticTargets', 'earningsView'];
 
 let fb = null;  // { auth, db } once Firebase is set up
 let synced = { prefs: '', bets: new Map(), cards: '' };  // last known Firestore copy (bet id → JSON)
@@ -169,8 +169,26 @@ function profitOf(b) {
   return 0;
 }
 
-function totalProfit() { return state.bets.reduce((s, b) => s + profitOf(b), 0); }
-function bankroll() { return num(state.settings.startingBankroll) + totalProfit(); }
+// Sums of dollars and cents drift (0.1 + 0.2), so each day and running total is kept to the cent
+const cents = n => Math.round(n * 100) / 100;
+
+// Each day's result: what its settled bets won or lost, by bet date
+function dailyResults() {
+  const byDay = new Map();
+  state.bets.forEach(b => { if (b.date) byDay.set(b.date, (byDay.get(b.date) || 0) + profitOf(b)); });
+  byDay.forEach((v, d) => byDay.set(d, cents(v)));
+  return byDay;
+}
+
+// The balance at the end of a day: the starting bankroll (Settings) plus every day's result up to it.
+// The Earnings calendar shows it day by day; the Tracker's Balance is today's, which is the starting
+// bankroll until you've bet. Bets dated after today count from their date.
+function balanceOn(date, byDay = dailyResults()) {
+  let bal = cents(num(state.settings.startingBankroll));
+  [...byDay.keys()].sort().forEach(d => { if (d <= date) bal = cents(bal + byDay.get(d)); });
+  return bal;
+}
+function bankroll() { return balanceOn(today()); }
 
 function sortedMatrix() { return [...state.matrix].sort((a, b) => a.size - b.size); }
 
@@ -667,13 +685,13 @@ $('#addBetRow').addEventListener('click', () => {
   row.querySelector(['date', 'track', 'race'].map(n => `[name=${n}]`).find(s => !row.querySelector(s).value) || '[name=race]').focus();
 });
 
-// Exotic stake starts at the wager's min bet from the exotic wager table (More Info; your edits included).
+// Exotic stake starts at the wager's target wager (above its tile on Exotic Wagering; the min bet until you set one).
 // It follows the bet type until you type your own amount.
 function autofillStake(tr) {
   const stake = tr.querySelector('[name=stake]');
-  const row = exoticRows().find(r => r.name === tr.querySelector('[name=type]').value);
+  const type = tr.querySelector('[name=type]').value;
   if (stake.value !== '' && stake.value !== stake.dataset.auto) return;
-  stake.value = row ? +row.min.toFixed(2) : '';
+  stake.value = isExoticType(type) ? +exoticTarget(type).toFixed(2) : '';
   stake.dataset.auto = stake.value;
 }
 
@@ -1034,12 +1052,19 @@ function renderRaces() {
   $('#exoticEmpty').classList.toggle('hidden', !!tracks.length);
   // Easiest to hardest, by the same difficulty stars as the exotic wager table (More Info),
   // colored the same way: vertical (one race) in cyan, horizontal (several races) in pink.
-  // Each shows today's 10 most likely tickets for that wager underneath.
+  // Each shows today's 10 most likely tickets for that wager underneath; above it is its target wager.
   $('#exoticTiles').innerHTML = [...EXOTIC_INFO].sort((a, b) => a.stars - b.stars).map(d => `
-    <button type="button" class="exotic-tile ${d.kind}" data-calc="${esc(d.name)}" title="Today's 10 most likely ${esc(d.name)} tickets">
-      <span class="tile-play" aria-hidden="true">${PLAY_SVG}</span>
-      <b>${esc(d.name)}</b>${starsHTML(d.stars)}<span class="tile-desc">${esc(d.short)}</span>
-      <span class="kind-tag ${d.kind}">${d.kind === 'vertical' ? 'Single Race' : 'Multiple Races'}</span></button>`).join('');
+    <div class="exotic-slot">
+      <label class="target-wager ${d.kind}" title="How much you mean to stake on each ${esc(d.name)}. Log bets fills it in as the stake.">
+        <span>Target wager</span>
+        <span class="target-input">$<input type="number" min="0" step="0.01" inputmode="decimal" data-target="${esc(d.name)}"
+          value="${+exoticTarget(d.name).toFixed(2)}" aria-label="${esc(d.name)} target wager"></span>
+      </label>
+      <button type="button" class="exotic-tile ${d.kind}" data-calc="${esc(d.name)}" title="Today's 10 most likely ${esc(d.name)} tickets">
+        <span class="tile-play" aria-hidden="true">${PLAY_SVG}</span>
+        <b>${esc(d.name)}</b>${starsHTML(d.stars)}<span class="tile-desc">${esc(d.short)}</span>
+        <span class="kind-tag ${d.kind}">${d.kind === 'vertical' ? 'Single Race' : 'Multiple Races'}</span></button>
+    </div>`).join('');
   renderModelToggle();
   renderBreedFilter();
   if (tracks.length) renderExoticResults();
@@ -1130,6 +1155,18 @@ $('#exoticCard').addEventListener('click', e => {
   if (!tile) return;
   exoticPick = exoticPick === tile.dataset.calc ? null : tile.dataset.calc;
   renderExoticResults();
+});
+
+// A target wager is saved once you leave its box; emptied, it goes back to the wager's min bet
+$('#exoticTiles').addEventListener('change', e => {
+  const inp = e.target.closest('[data-target]');
+  if (!inp) return;
+  const targets = { ...(state.exoticTargets || {}) };
+  if (inp.value === '') delete targets[inp.dataset.target];
+  else targets[inp.dataset.target] = Math.max(0, num(inp.value));
+  state.exoticTargets = targets;
+  save();
+  inp.value = +exoticTarget(inp.dataset.target).toFixed(2);
 });
 
 /* Clicking a top-10 ticket cycles its mark: none (its rank) → bet (green check, tinted green)
@@ -2284,6 +2321,15 @@ const exoticRows = () => EXOTIC_INFO.map(d => {
   return { ...d, min, payout, roi, outcomes: outcomes(d.kind, d.legs, fieldSize()), breakeven: roi ? 1 / roi : Infinity };
 });
 
+// Target wager: how much you mean to stake on each exotic (above its tile on Exotic Wagering; raise it as
+// your bankroll grows). Until you set one, it's the wager's min bet from this table, your edits included.
+const exoticTarget = name => {
+  const mine = (state.exoticTargets || {})[name];
+  if (mine != null) return mine;
+  const row = exoticRows().find(r => r.name === name);
+  return row ? row.min : 0;
+};
+
 function renderExoticTable() {
   const { key, dir } = exoticSort;
   const rows = exoticRows().sort((a, b) => (key === 'name' ? a.name.localeCompare(b.name) : a[key] - b[key]) * dir || a.name.localeCompare(b.name));
@@ -2344,6 +2390,7 @@ $('#exoticTable').addEventListener('change', e => {
   state.exoticInfo = info;
   save();
   renderExoticTable();
+  renderRaces();  // target wagers you haven't set follow the min bet
 });
 
 $('#exoticField').addEventListener('change', e => {
@@ -2359,6 +2406,7 @@ $('#exoticReset').addEventListener('click', async () => {
   state.exoticInfo = {};
   save();
   renderExoticTable();
+  renderRaces();
 });
 
 // The table lives in a popup opened by Exotic Wagering's More Info button. It stays in the page while
@@ -2397,8 +2445,6 @@ $('#earningsView').addEventListener('click', e => {
    Days before your first bet and days still to come stay blank. ----- */
 
 let calMonth = null;  // 'YYYY-MM' on screen; this month until you move
-// Sums of dollars and cents drift (0.1 + 0.2), so each day and running total is kept to the cent
-const cents = n => Math.round(n * 100) / 100;
 
 // For narrow screens: no cents from $100 up, thousands as k ($1.2k)
 function moneyShort(n, signed = false) {
@@ -2413,20 +2459,19 @@ function renderCalendar() {
   const now = today();
   if (!calMonth) calMonth = now.slice(0, 7);
   const [y, m] = calMonth.split('-').map(Number);
-  const byDay = new Map();
-  state.bets.forEach(b => { if (b.date) byDay.set(b.date, (byDay.get(b.date) || 0) + profitOf(b)); });
+  const byDay = dailyResults();
   const days = [...byDay.keys()].sort();
   const firstMonth = (days[0] || now).slice(0, 7);
-  // Balance at the end of the day before this month starts
-  let bal = cents(num(state.settings.startingBankroll) + days.filter(d => d < calMonth + '-01').reduce((s, d) => s + byDay.get(d), 0));
+  // Balance at the end of the day before this month starts ("-00" sorts just before the 1st)
+  let bal = balanceOn(calMonth + '-00', byDay);
 
   const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const cells = DOW.map(d => `<div class="cal-dow"><span class="cal-full">${d}</span><span class="cal-short">${d[0]}</span></div>`);
   for (let i = new Date(y, m - 1, 1).getDay(); i > 0; i--) cells.push('<div class="cal-day out"></div>');
-  const month = { net: 0, up: 0, down: 0, best: null, end: null };
+  const month = { net: 0, up: 0, down: 0, best: null };
   for (let d = 1; d <= new Date(y, m, 0).getDate(); d++) {
     const iso = `${calMonth}-${String(d).padStart(2, '0')}`;
-    const has = byDay.has(iso), pl = has ? cents(byDay.get(iso)) : 0;
+    const has = byDay.has(iso), pl = has ? byDay.get(iso) : 0;
     bal = cents(bal + pl);
     const isToday = iso === now ? 'today' : '';
     if (iso > now || !days.length || iso < days[0]) {
@@ -2438,7 +2483,6 @@ function renderCalendar() {
     if (kind === 'up') month.up++;
     if (kind === 'down') month.down++;
     if (has && (month.best == null || pl > month.best)) month.best = pl;
-    month.end = bal;
     cells.push(`
       <div class="cal-day ${kind} ${isToday}" title="${fmtDate(iso)}: ${has ? money(pl, true) : 'no bets'}. Balance ${money(bal)}">
         <span class="cal-date">${d}</span>
@@ -2449,6 +2493,12 @@ function renderCalendar() {
 
   const name = new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
   const color = n => n >= 0.005 ? 'profit' : n <= -0.005 ? 'loss' : 'muted';
+  // This month: today's balance, the Tracker's; an earlier month: its last day's ("-32" sorts after every day)
+  const thisMonth = calMonth === now.slice(0, 7);
+  const monthBal = thisMonth ? bankroll() : balanceOn(calMonth + '-32', byDay);
+  // Bets the calendar can't place on a day, so they're not in any balance yet
+  const later = state.bets.filter(b => b.date > now && profitOf(b)).length;
+  const undated = state.bets.filter(b => !b.date && profitOf(b)).length;
   $('#earningsCalendar').innerHTML = `
     <div class="cal-head">
       <div class="cal-nav">
@@ -2460,13 +2510,15 @@ function renderCalendar() {
     </div>
     <div class="cal-summary">
       <div><small>Month P/L</small><b class="${color(month.net)}">${money(month.net, true)}</b></div>
-      <div><small>${calMonth === now.slice(0, 7) ? 'Balance today' : 'Balance at month end'}</small><b>${month.end == null ? '—' : money(month.end)}</b></div>
+      <div><small>${thisMonth ? 'Balance today' : 'Balance at month end'}</small><b>${money(monthBal)}</b></div>
       <div><small>Up / down days</small><b><span class="profit">${month.up}</span> / <span class="loss">${month.down}</span></b></div>
       <div><small>Best day</small><b class="${month.best > 0 ? 'profit' : 'muted'}">${month.best == null ? '—' : money(month.best, true)}</b></div>
     </div>
     <div class="cal-grid">${cells.join('')}</div>
-    <p class="muted tiny cal-note">Small number: what you won or lost that day. Big number: your balance at the end of it, every bet counted.
-      ${days.length ? '' : 'Log a bet and its day shows up here.'}</p>`;
+    <p class="muted tiny cal-note">Small number: what you won or lost that day. Big number: your balance at the end of it, starting from
+      your starting bankroll in Settings. Today's is the Balance on the Tracker. ${days.length ? '' : 'Log a bet and its day shows up here.'}
+      ${later ? `<span class="loss">${later === 1 ? '1 bet is' : `${later} bets are`} dated after today, so ${later === 1 ? 'it counts' : 'they count'} from that day.</span>` : ''}
+      ${undated ? `<span class="loss">${undated === 1 ? '1 bet has' : `${undated} bets have`} no date, so ${undated === 1 ? "it isn't" : "they aren't"} counted (delete and log ${undated === 1 ? 'it' : 'them'} again with a date).</span>` : ''}</p>`;
 }
 
 $('#earningsCalendar').addEventListener('click', e => {
