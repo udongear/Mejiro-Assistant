@@ -1818,7 +1818,7 @@ $('#scrapeAll').addEventListener('click', () => {
     <ol class="scrape-steps">
       <li>Open TwinSpires' <b>Today's Races</b> list, filtered how you like (e.g. Thoroughbred, North American).</li>
       <li>Click your <b>Mejiro Capture</b> bookmark. Every track it finds comes ticked; use <b>Deselect all</b> to pick just a few.</li>
-      <li>Click <b>Capture ticked tracks</b> and keep that tab on screen while it works (about a second per horse). Browsers slow down hidden tabs.</li>
+      <li>Click <b>Capture ticked tracks</b>. It keeps going if you switch to another tab, and the summary says how long it took.</li>
       <li>When it finishes, click <b>Send to Mejiro</b>. Every track lands here at once.</li>
     </ol>
     <p class="muted small-text">Programs open in whichever view you used last on TwinSpires. Leave it on <b>Advanced</b>, the view the bookmark reads.</p>
@@ -1864,7 +1864,39 @@ $('#exportCards').addEventListener('click', async () => {
 function mejiroCapture(site) {
   if (window.__mejiroBusy) return;
   window.__mejiroBusy = true;
-  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const started = Date.now();
+  let counted = 0;  /* horses read so far, for the summary's time per horse */
+  /* Waiting runs on a tiny background worker's clock: browsers slow a hidden tab's own timers to once a
+     second, then once a minute, which turned a capture left in the background into hours. If the page
+     won't allow the worker, its own timers do. */
+  let clock = null, ticket = 0;
+  const waiting = new Map();
+  try {
+    clock = new Worker(URL.createObjectURL(new Blob(['onmessage=e=>setTimeout(()=>postMessage(e.data[0]),e.data[1])'], { type: 'text/javascript' })));
+    clock.onmessage = e => { const go = waiting.get(e.data); waiting.delete(e.data); if (go) go(); };
+    clock.onerror = () => { clock = null; waiting.forEach(go => go()); waiting.clear(); };
+  } catch (err) { clock = null; }
+  const sleep = ms => new Promise(go => {
+    if (!clock) return setTimeout(go, ms);
+    const id = ++ticket;
+    waiting.set(id, go);
+    clock.postMessage([id, ms]);
+  });
+  /* Waits until test() gives something, checking whenever the page changes (and every 80 ms anyway),
+     for up to `ms`; gives the last result */
+  const changeOr = ms => new Promise(go => {
+    const watch = new MutationObserver(() => { watch.disconnect(); go(); });
+    watch.observe(document.body, { childList: true, subtree: true, characterData: true });
+    sleep(ms).then(() => { watch.disconnect(); go(); });
+  });
+  const until = async (test, ms) => {
+    const end = Date.now() + ms;
+    for (;;) {
+      const got = test();
+      if (got || Date.now() >= end) return got;
+      await changeOr(80);
+    }
+  };
   const clean = s => String(s || '').replace(/\s+/g, ' ').trim();
   const html = s => clean(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const box = document.createElement('div');
@@ -1885,9 +1917,25 @@ function mejiroCapture(site) {
     `border-radius:8px;border:1px solid #7B61FF;background:${primary ? '#7B61FF' : 'transparent'};color:#fff;font:600 13px system-ui;cursor:pointer">${label}</button>`;
   const note = text => `<div style="margin-top:10px;font-size:12px;color:#9C92BC">${text}</div>`;
   const field = 'display:block;width:100%;margin-top:4px;padding:6px 8px;border-radius:6px;border:1px solid #2A2240;background:#16111F;color:#F1ECFF;font:14px system-ui';
-  const finish = () => { box.remove(); window.__mejiroBusy = false; };
-  const elements = () => [...document.body.querySelectorAll('*')].filter(el => !box.contains(el));
-  const leaves = () => elements().filter(el => !el.children.length);
+  const finish = () => { box.remove(); if (clock) clock.terminate(); window.__mejiroBusy = false; };
+  /* The page's elements (or text pieces) outside this panel, walked once without visiting the panel */
+  const walk = (what, keep) => {
+    const out = [], w = document.createTreeWalker(document.body, what, {
+      acceptNode: n => n === box ? NodeFilter.FILTER_REJECT : keep(n) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP });
+    for (let n = w.nextNode(); n; n = w.nextNode()) out.push(n);
+    return out;
+  };
+  const leaves = () => walk(NodeFilter.SHOW_ELEMENT, n => !n.firstElementChild);
+  /* The innermost elements whose text passes `test`, found from their text pieces that pass `hint` (a cheap
+     first check), without reading every element's text: that was most of each check's time */
+  const leavesWith = (hint, test) => {
+    const found = new Set();
+    walk(NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT, n => n.nodeType === 3 && hint(n.nodeValue)).forEach(t => {
+      const el = t.parentElement;
+      if (el && !el.firstElementChild && test(clean(el.textContent))) found.add(el);
+    });
+    return [...found];
+  };
   const up = (el, k) => { while (el && k-- > 0) el = el.parentElement; return el; };
   /* Text of each innermost element, separately: a row's textContent runs its cells together ("LIFE25203") */
   const cellTexts = el => [...el.querySelectorAll('*')].filter(c => !c.children.length).map(c => clean(c.textContent)).filter(Boolean);
@@ -1902,7 +1950,16 @@ function mejiroCapture(site) {
   /* The runner list as it is right now. Each runner has a description like "Bay, Gelding, 4 yrs (KY) L" under its name. */
   const DESC = /\b(colt|filly|mare|horse|gelding|ridgling)\b.*?\b\d{1,2}\s*yrs?\b/i;
   const findRunners = () => {
-    let descs = elements().filter(el => el.textContent.length < 90 && DESC.test(clean(el.textContent)));
+    /* Each description is the lowest element over a "4 yrs" piece of text whose (short) text reads like one */
+    const found = new Set();
+    walk(NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT, n => n.nodeType === 3 && /yrs?\b/i.test(n.nodeValue)).forEach(t => {
+      for (let el = t.parentElement, i = 0; el && i < 5; el = el.parentElement, i++) {
+        const text = el.textContent;
+        if (text.length >= 90) break;
+        if (DESC.test(clean(text))) { found.add(el); break; }
+      }
+    });
+    let descs = [...found].sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
     descs = descs.filter(el => !descs.some(o => o !== el && el.contains(o)));
     /* Runner rows: the lowest ancestors that are distinct for every runner and share one parent */
     let rows = descs.length === 1 ? [descs[0].closest('tr') || up(descs[0], 3)] : null;
@@ -1955,8 +2012,7 @@ function mejiroCapture(site) {
   /* A horse's LIFE row, read only from a panel that names that horse (never from another runner's row) */
   const lifeOf = (name, rows) => {
     const key = name.toUpperCase();
-    for (const label of leaves()) {
-      if (clean(label.textContent).toUpperCase() !== 'LIFE') continue;
+    for (const label of leavesWith(t => /life/i.test(t), t => t.toUpperCase() === 'LIFE')) {
       let p = label;
       for (let i = 0; i < 15 && (p = p.parentElement); i++) {
         if (rows.some(r => r !== p && p.contains(r))) break;
@@ -1973,7 +2029,7 @@ function mejiroCapture(site) {
   };
 
   const texts = () => leaves().map(el => [el, clean(el.textContent)]).filter(([, t]) => t && t.length < 40);
-  const raceNow = () => { const hit = texts().find(([, t]) => /^RACE\s*\d{1,2}$/i.test(t)); return hit ? +hit[1].match(/\d+/)[0] : 0; };
+  const raceNow = () => { const hit = leavesWith(t => /race/i.test(t), t => /^RACE\s*\d{1,2}$/i.test(t))[0]; return hit ? +clean(hit.textContent).match(/\d+/)[0] : 0; };
   /* Race type: thoroughbred, harness or quarter (horse). From the address first: TwinSpires program addresses
      have it as its own part, after the track, like /bet/program/classic/horseshoe-indianapolis/ind/Thoroughbred/9/advanced
      (only a whole part counts, so a track named after a type can't fool it). Else from a lone type label near
@@ -1988,7 +2044,7 @@ function mejiroCapture(site) {
     return near.size === 1 ? [...near][0] : '';
   };
   /* The previous/next race buttons read "R7", "R9" */
-  const raceButton = n => leaves().find(el => clean(el.textContent) === 'R' + n);
+  const raceButton = n => leavesWith(t => /^\s*R\s*\d{0,2}\s*$/i.test(t), t => t === 'R' + n)[0];
   const trackName = () => {
     const named = document.querySelector('.track-name');
     if (named && clean(named.textContent)) return clean(named.textContent);
@@ -2016,12 +2072,11 @@ function mejiroCapture(site) {
   };
 
   /* Change pages inside TwinSpires (as its own Back button does), so this panel keeps running */
-  const waitFor = async (test, tries) => { for (let i = 0; i < tries; i++) { if (test()) return true; await sleep(200); } return !!test(); };
   const toList = async () => {
     if (listRows().length) return true;
     history.pushState(null, '', '/bet/todays-races/time');
     window.dispatchEvent(new PopStateEvent('popstate', { state: null }));
-    return waitFor(() => listRows().length, 75);
+    return !!await until(() => listRows().length, 15000);
   };
   /* Open a track's program by pressing its name in the list, then wait for its runners */
   const openFromList = async t => {
@@ -2031,8 +2086,8 @@ function mejiroCapture(site) {
     const target = [...row.querySelectorAll('.track-name')].pop() || row;
     target.scrollIntoView({ block: 'center' });
     press(target);
-    if (!await waitFor(() => !listRows().length && (findRunners() || []).length && raceNow(), 100)) return false;
-    await sleep(800);
+    if (!await until(() => !listRows().length && (findRunners() || []).length && raceNow(), 20000)) return false;
+    await sleep(300);  /* let the program finish drawing */
     return true;
   };
 
@@ -2062,11 +2117,17 @@ function mejiroCapture(site) {
     /* On a list page (Today's Races) there are no runners: show the track list itself */
     const group = !runners && document.querySelector('[class*="track-list"]');
     const listRoot = group && (group.closest('main, [class*="content"]') || up(group, 3));
+    /* The data the page has loaded in the background (addresses only, values after "=" hidden): if one of them
+       holds the horses' records, a capture could read a whole race at once instead of opening each horse */
+    const requests = [...new Set(performance.getEntriesByType('resource')
+      .filter(e => e.initiatorType === 'fetch' || e.initiatorType === 'xmlhttprequest')
+      .map(e => e.name.replace(/([?&][^=&#]+)=[^&#]*/g, '$1=…')))].slice(-60);
     return [
       '<!-- TRACK LIST -->', listRoot ? strip(listRoot) : '(none)',
       '<!-- RUNNER LIST -->', anchor ? strip(up(anchor, 2) || anchor) : '(not found)',
       '<!-- LIFE PANEL -->', life ? strip(up(life, 8) || life) : '(no "LIFE" text on the page: open a horse\'s record by hand first)',
       '<!-- TOP OF PAGE -->', top.join('\n'),
+      '<!-- DATA REQUESTS -->', requests.join('\n') || '(none)',
       '<!-- ADDRESS -->', location.pathname + location.search].join('\n').slice(0, 200000);
   };
   const copyButton = () => {
@@ -2084,14 +2145,16 @@ function mejiroCapture(site) {
       const r = runners[i];
       show(`${prefix}Reading ${i + 1} of ${runners.length}: <b>${html(r.horse)}</b>…`);
       let life = lifeOf(r.horse, rows);  /* already open */
+      /* Press its name (then its row, if that does nothing) and go on as soon as its record shows */
       for (const target of [r.nameEl, r.row].filter((t, k, a) => t && a.indexOf(t) === k)) {
         if (life) break;
         target.scrollIntoView({ block: 'center' });
         press(target);
-        for (let t = 0; t < (r.scratched ? 10 : 25) && !life; t++) { await sleep(150); life = lifeOf(r.horse, rows); }
+        life = await until(() => lifeOf(r.horse, rows), r.scratched ? 1500 : 4000);
       }
       out.push(Object.assign({ pp: r.pp, horse: r.horse, scratched: r.scratched, ml: r.ml, found: !!life }, life || {}));
-      await sleep(200);
+      counted++;
+      await sleep(40);
     }
     return out;
   };
@@ -2102,12 +2165,13 @@ function mejiroCapture(site) {
     if (!control) return false;
     const before = (findRunners() || []).map(r => r.horse).join('|');
     press(control);
-    for (let t = 0; t < 80; t++) {
-      await sleep(150);
+    const shown = await until(() => {
+      if (raceNow() !== n) return false;
       const now = findRunners();
-      if (raceNow() === n && now && now.length && now.map(r => r.horse).join('|') !== before) { await sleep(500); return true; }
-    }
-    return raceNow() === n;
+      return now && now.length && now.map(r => r.horse).join('|') !== before;
+    }, 12000);
+    if (shown) await sleep(250);  /* let the race finish drawing */
+    return shown || raceNow() === n;
   };
 
   /* The track that's showing, from race `from` (1 for the whole card) forward until there's no next-race button.
@@ -2170,6 +2234,14 @@ function mejiroCapture(site) {
       (count[''] ? `${named.length ? '; ' : ''}<span style="color:#FF5C6C">type not found for ${count['']} race${count[''] === 1 ? '' : 's'}</span> (counted as Thoroughbred)` : '') + '</div>';
   };
 
+  /* How long it took, and per horse */
+  const timeLine = () => {
+    const s = Math.round((Date.now() - started) / 1000);
+    const took = s >= 60 ? `${Math.floor(s / 60)} min ${s % 60} s` : `${s} s`;
+    return `<div>Took ${took}${counted ? ` (${(s / counted).toFixed(1)} s per horse)` : ''}.</div>` +
+      (clock ? '' : note('TwinSpires blocked the background clock, so keep this tab on screen while it works.'));
+  };
+
   const doneAll = (cards, failed, over) => {
     running = false;
     const all = cards.flatMap(c => c.races.flatMap(r => r.entrants));
@@ -2177,7 +2249,7 @@ function mejiroCapture(site) {
     const noML = all.length && !all.some(e => e.ml);
     const list = cards.map(c => { const n = c.races.flatMap(r => r.entrants), f = n.filter(e => e.found).length;
       return `<b>${html(c.track)}</b>: ${c.races.length} race${c.races.length === 1 ? '' : 's'}, ${n.length} horse${n.length === 1 ? '' : 's'}` + (f < n.length ? ` <span style="color:#FF5C6C">(${n.length - f} without a record)</span>` : ''); });
-    show(`<div>Read ${found} of ${all.length} records across ${cards.length} tracks.</div>` + (all.length ? mlLine(all) + typeLine(cards.flatMap(c => c.races)) : '') + note(list.join('<br>')) +
+    show(`<div>Read ${found} of ${all.length} records across ${cards.length} tracks.</div>` + (all.length ? mlLine(all) + typeLine(cards.flatMap(c => c.races)) : '') + timeLine() + note(list.join('<br>')) +
       (failed.length ? note(`<span style="color:#FF5C6C">Couldn't open: ${failed.map(html).join(', ')}</span>`) : '') +
       (over.length ? note(`Already finished for the day: ${over.map(html).join(', ')}`) : '') +
       (cards.length ? sendLink : '') + button('mc-close', 'Close') +
@@ -2199,7 +2271,7 @@ function mejiroCapture(site) {
           (e.ml ? ` · ML ${html(e.ml)}` : '')).join('<br>')
       : races.map(r => { const f = r.entrants.filter(e => e.found).length; return `Race ${r.race}: ${r.entrants.length} horses` +
           (f < r.entrants.length ? ` <span style="color:#FF5C6C">(${r.entrants.length - f} without a record)</span>` : ''); }).join('<br>');
-    show(`<div>Read ${found} of ${all.length} records${single ? '' : ` across ${races.length} races`}.</div>` + (all.length ? mlLine(all) + typeLine(races) : '') +
+    show(`<div>Read ${found} of ${all.length} records${single ? '' : ` across ${races.length} races`}.</div>` + (all.length ? mlLine(all) + typeLine(races) : '') + timeLine() +
       `<label style="display:block;margin-top:10px;font-size:12px;color:#9C92BC">Track<input id="mc-track" style="${field}" value="${html(track)}"></label>` +
       (single ? `<label style="display:block;margin-top:8px;font-size:12px;color:#9C92BC">Race<input id="mc-race" type="number" min="1" max="15" style="${field}" value="${races[0].race || ''}"></label>` : '') +
       note(list) + sendLink + button('mc-close', 'Close') +
@@ -2238,7 +2310,7 @@ function mejiroCapture(site) {
       tracks.map((t, i) => `<label style="${label}"><input type="checkbox" data-i="${i}" checked> ${html(t.name)}` +
         `<span style="margin-left:auto;font-size:12px;color:#9C92BC">${t.finished ? 'finished' : `R${t.race}${t.status ? ' · ' + html(t.status) : ''}`}</span></label>`).join('') + '</div>' +
       button('mc-toggle', 'Deselect all') + '<br>' + button('mc-go', 'Capture ticked tracks', true) + button('mc-close', 'Close') +
-      note('About a second per horse. Keep this tab on screen until it finishes: browsers slow down hidden tabs.'));
+      note('It keeps going if you switch to another tab. The summary at the end says how long it took.'));
     const boxes = [...box.querySelectorAll('input[data-i]')], toggle = box.querySelector('#mc-toggle');
     const allOn = () => boxes.every(c => c.checked);
     const syncToggle = () => { toggle.textContent = allOn() ? 'Deselect all' : 'Select all'; };
@@ -2279,9 +2351,11 @@ function mejiroCapture(site) {
   const track = trackName(), start = raceNow();
   show(`<div><b>${html(track) || 'This track'}</b>${start ? ` · Race ${start}` : ''}: ${first.length} runners.</div>` +
     button('mc-one', 'This race', true) + button('mc-all', 'All races') + button('mc-every', 'Every track') + button('mc-close', 'Close') +
-    note('<b>All races</b> goes back to Race 1, then reads every race on the card (about a second per horse). ' +
-      '<b>Every track</b> goes to TwinSpires\' Today\'s Races list so you can pick tracks. Keep this tab on screen while it works: browsers slow down hidden tabs.'));
+    note('<b>All races</b> goes back to Race 1, then reads every race on the card. ' +
+      '<b>Every track</b> goes to TwinSpires\' Today\'s Races list so you can pick tracks. It keeps going if you switch to another tab.') +
+    button('mc-copy', 'Copy page outline'));
   box.querySelector('#mc-close').onclick = finish;
+  copyButton();
   box.querySelector('#mc-one').onclick = async () => {
     const entrants = await readRace('');
     done([{ race: start, entrants: entrants || [], breed: breedNow() }], track, null);
