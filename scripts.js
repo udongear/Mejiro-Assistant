@@ -2855,8 +2855,7 @@ function renderHistory() {
     const a = accuracyOf(b);
     if (!a) return `<td class="muted" ${b.status === 'lost' && betInfo(b.type) ? 'title="Add the actual winners to see how close it was"' : ''}>—</td>`;
     const pct = a.hits / a.legs;
-    // Every horse came in but the bet still lost: a one-race exotic in the wrong order
-    const wrongOrder = pct === 1 && b.status === 'lost' && betInfo(b.type).kind === 'vertical';
+    const wrongOrder = falseWin(b);
     return `<td><span class="accuracy ${pct === 1 ? 'full' : pct >= 0.5 ? 'half' : ''}">${Math.round(pct * 100)}%</span>
       <small class="muted">${a.hits} of ${a.legs}</small>${wrongOrder
       ? `<span class="order-x" role="img" aria-label="Incorrect order" title="Incorrect order">${X_SVG}</span>` : ''}</td>`;
@@ -2947,16 +2946,35 @@ function download(name, text, type) {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
+// A false win: every horse came in (100% accuracy) but the bet still lost, a one-race exotic in the wrong order
+function falseWin(b) {
+  const a = accuracyOf(b), info = betInfo(b.type);
+  return !!a && a.hits === a.legs && b.status === 'lost' && info.kind === 'vertical';
+}
+
+// The list as it's showing: the same filters, rows and column order (plus False Win after Accuracy).
+// Horses are written 4–7–1, or 4 / 7 / 1 for a Pick bet: a spreadsheet would read "4-7-1" or "4/7/1" as a date.
 $('#exportCsv').addEventListener('click', () => {
-  const cols = ['date', 'track', 'race', 'horse', 'type', 'stake', 'status', 'payout', 'profit', 'winners'];
-  const cell = v => /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : v;
-  // Winners read like the Horse # column: 4-7-1, or 4/7/1 for a Pick bet
-  const value = (b, c) => c === 'profit' ? profitOf(b).toFixed(2)
-    : c === 'winners' ? (b.winners || []).join(betInfo(b.type) && betInfo(b.type).kind === 'horizontal' ? '/' : '-')
-    : b[c] ?? '';
-  // Every bet
-  const lines = state.bets.map(b => cols.map(c => cell(value(b, c))).join(','));
-  download(`mejiro-bets-${today()}.csv`, [cols.join(','), ...lines].join('\n'), 'text/csv');
+  const rows = [...historyRows()].reverse();  // newest first, like the list
+  if (!rows.length) return toast('No bets to export with these filters');
+  const horses = (b, list) => (list || []).join(betInfo(b.type) && betInfo(b.type).kind === 'horizontal' ? ' / ' : '–');
+  const cols = [
+    ['Date', b => b.date],
+    ['Track', b => b.track],
+    ['Race', b => b.race],
+    ['Horse #', b => { const p = picksOf(b.horse); return p.length && p.every(Number.isInteger) ? horses(b, p) : b.horse; }],
+    ['Type', b => b.type],
+    ['Result', b => (b.status === 'open' ? 'PENDING' : String(b.status || '').toUpperCase())],
+    ['Actual winners', b => horses(b, b.winners)],
+    ['Accuracy', b => { const a = accuracyOf(b); return a ? Math.round(a.hits / a.legs * 100) + '%' : ''; }],
+    ['False Win', b => (falseWin(b) ? 'TRUE' : 'FALSE')],
+    ['Stake', b => num(b.stake).toFixed(2)],
+    ['Return', b => (b.status === 'won' ? num(b.payout).toFixed(2) : '')],
+  ];
+  const cell = v => /[",\n]/.test(String(v ?? '')) ? `"${String(v).replace(/"/g, '""')}"` : (v ?? '');
+  const lines = rows.map(b => cols.map(([, get]) => cell(get(b))).join(','));
+  download(`mejiro-bets-${today()}.csv`, [cols.map(([name]) => name).join(','), ...lines].join('\n'), 'text/csv');
+  toast(`Exported ${rows.length} bet${rows.length === 1 ? '' : 's'}`);
 });
 
 /* =========================================================
