@@ -407,6 +407,8 @@ input[type="date"] { color-scheme: dark; }
 .horse-btn:hover:not(:disabled), .winners-btn:hover:not(:disabled) { border-color: var(--violet); }
 .horse-btn:disabled, .winners-btn:disabled { color: var(--muted); border-style: solid; opacity: .5; cursor: default; }
 .horse-btn.invalid { border: 1px solid var(--loss); color: var(--loss); box-shadow: 0 0 0 1px var(--loss); }
+/* Actual winners filled in from another bet on the same race (pick them yourself to change them) */
+.winners-btn.auto { border-color: var(--violet); background: rgba(123, 97, 255, .12); }
 .horse-btn .xc-cloths, .winners-btn .xc-cloths, .pick-cloths .xc-cloths { flex-wrap: nowrap; gap: 3px; }
 .horse-btn .cloth, .winners-btn .cloth, .pick-cloths .cloth { min-width: 22px; height: 22px; font-size: 12px; }
 .pick-cloths { display: inline-flex; }
@@ -447,6 +449,8 @@ input[type="date"] { color-scheme: dark; }
 }
 .np-actions button:disabled { opacity: .4; cursor: default; }
 .np-actions .np-done { background: var(--violet); border-color: var(--violet); color: #fff; }
+/* The picker's reminder that numbers can be typed */
+.np-keys { margin: 10px 0 0; color: var(--muted); font-size: 11px; text-align: center; }
 
 /* Saddle-cloth numbers, in the standard program colors */
 .cloth {

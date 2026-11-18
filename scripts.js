@@ -562,21 +562,85 @@ function syncHorse(tr) {
   if (!$('#betRows .horse-btn.invalid')) $('#betError').classList.add('hidden');
 }
 
-// The row's Actual winners button works only for a lost exotic bet; changing the type or result clears it
+// The row's Actual winners button works only for a lost exotic bet; changing the type or result clears it.
+// data-auto marks winners filled in from another bet on the same race (see "Actual winners fill themselves in").
 function syncWinners(tr) {
   const btn = tr.querySelector('.winners-btn');
   const info = betInfo(tr.querySelector('[name=type]').value);
   btn.disabled = !info || tr.querySelector('[name=result]').value !== 'lost';
-  if (btn.disabled) btn.dataset.winners = '';
+  if (btn.disabled) { btn.dataset.winners = ''; btn.dataset.auto = ''; }
+  const auto = !!btn.dataset.auto && !!btn.dataset.winners;
+  btn.classList.toggle('auto', auto);
   btn.innerHTML = winnersHTML(picksOf(btn.dataset.winners), info) || (btn.disabled ? '—' : 'Pick…');
-  btn.title = btn.disabled ? 'For exotic bets you lost' : 'Pick the horses that actually finished';
+  btn.title = btn.disabled ? 'For exotic bets you lost'
+    : auto ? 'Filled in from another bet on this race. Click to change' : 'Pick the horses that actually finished';
 }
 
-let numPicker = null;  // { anchor, close, undo } while the number picker is open
+/* ----- Actual winners fill themselves in: a race's finish, entered on one bet (in Log bets, or on a bet
+   already logged), fills every other lost exotic on the same day, track and race. A one-race exotic takes
+   the first places it needs (a Trifecta's 4-7-1 gives an Exacta 4-7); a Pick bet takes each of its races'
+   winners. Winners you set yourself are never replaced. ----- */
 
-// A small popup of program numbers 1–16 in saddle-cloth colors, like an emoji picker. Each press fills
-// the next slot (1st, 2nd… or each Pick race), and it closes by itself once every slot is filled.
-// However it closes, onClose gets the numbers picked so far. Used for your picks and the actual winners.
+const raceKey = (date, track, race) => [date, String(track || '').trim().toLowerCase(), num(race)].join('|');
+
+// What's known of each race (raceKey → finishing order, winner first): the bets given, then `firm` ones,
+// which win a disagreement. A one-race exotic gives the order as far as it goes; a Pick bet, each race's winner.
+function knownFinishes(bets, firm = []) {
+  const known = new Map();
+  const learn = (b, isFirm) => {
+    const info = betInfo(b.type), w = b.winners;
+    if (!info || !w || !w.length || !b.date || !b.track || !num(b.race)) return;
+    const set = (k, order) => {
+      const had = known.get(k) || [];
+      const agrees = had.length >= order.length ? order.every((n, i) => had[i] === n) : had.every((n, i) => order[i] === n);
+      if (agrees ? order.length > had.length : isFirm) known.set(k, order);
+    };
+    if (info.kind === 'vertical') set(raceKey(b.date, b.track, b.race), [...w]);
+    else w.forEach((n, i) => set(raceKey(b.date, b.track, num(b.race) + i), [n]));
+  };
+  bets.forEach(b => learn(b, false));
+  firm.forEach(b => learn(b, true));
+  return known;
+}
+
+// The winners a lost exotic gets from what's known, or null if its races aren't known well enough
+function finishFor(b, known) {
+  const info = betInfo(b.type);
+  if (!info) return null;
+  if (info.kind === 'vertical') {
+    const order = known.get(raceKey(b.date, b.track, b.race));
+    return order && order.length >= info.legs ? order.slice(0, info.legs) : null;
+  }
+  const w = Array.from({ length: info.legs }, (_, i) => (known.get(raceKey(b.date, b.track, num(b.race) + i)) || [])[0]);
+  return w.every(Boolean) ? w : null;
+}
+
+// Log bets: fills (or refreshes) the winners of every lost exotic row that you haven't set yourself
+function autofillWinners() {
+  const rowBet = tr => {
+    const v = n => tr.querySelector(`[name=${n}]`).value;
+    return { date: v('date'), track: v('track'), race: v('race'), type: v('type'), winners: picksOf(tr.querySelector('.winners-btn').dataset.winners) };
+  };
+  const rows = $$('#betRows tr');
+  const mine = rows.filter(tr => { const b = tr.querySelector('.winners-btn'); return b.dataset.winners && !b.dataset.auto; });
+  const known = knownFinishes(state.bets, mine.map(rowBet));
+  rows.forEach(tr => {
+    const btn = tr.querySelector('.winners-btn');
+    if (btn.disabled || (btn.dataset.winners && !btn.dataset.auto)) return;
+    const fill = finishFor(rowBet(tr), known);
+    btn.dataset.winners = fill ? fill.join(',') : '';
+    btn.dataset.auto = fill ? '1' : '';
+    syncWinners(tr);
+  });
+}
+
+let numPicker = null;  // { anchor, close, undo, add } while the number picker is open
+const PICKER_MAX = 16;  // program numbers on the picker
+
+// A small popup of program numbers 1–16 in saddle-cloth colors, like an emoji picker. Each press (or typed
+// number, see "Typing numbers" below) fills the next slot (1st, 2nd… or each Pick race), and it closes by
+// itself once every slot is filled. However it closes, onClose gets the numbers picked so far. Used for
+// your picks and the actual winners.
 function openNumPicker(anchor, info, current, firstRace, onClose, title) {
   closeNumPicker();
   const vertical = info.kind === 'vertical';
@@ -593,14 +657,15 @@ function openNumPicker(anchor, info, current, firstRace, onClose, title) {
       <div class="np-head"><b>${esc(title)}</b><span>${esc(info.name)}</span></div>
       <div class="np-slots">${Array.from({ length: info.legs }, (_, i) => `
         <span class="np-slot ${i === seq.length ? 'next' : ''}"><small>${slotName(i)}</small>${seq[i] ? cloth(seq[i]) : '<span class="np-blank"></span>'}</span>`).join('')}</div>
-      <div class="np-grid">${Array.from({ length: 16 }, (_, i) => i + 1).map(n => `
+      <div class="np-grid">${Array.from({ length: PICKER_MAX }, (_, i) => i + 1).map(n => `
         <button type="button" data-n="${n}" aria-label="Number ${n}"
           ${seq.length >= info.legs || (vertical && seq.includes(n)) ? 'disabled' : ''}>${cloth(n)}</button>`).join('')}</div>
       <div class="np-actions">
         <button type="button" data-np="undo" ${seq.length ? '' : 'disabled'}>⌫ Undo</button>
         <button type="button" data-np="clear" ${seq.length ? '' : 'disabled'}>Clear</button>
         <button type="button" data-np="done" class="np-done">Done</button>
-      </div>`;
+      </div>
+      <p class="np-keys">Or type: 4, 7, 1 · ⌫ undo · Enter done</p>`;
   };
   const close = () => {
     if (closed) return;
@@ -610,16 +675,23 @@ function openNumPicker(anchor, info, current, firstRace, onClose, title) {
     window.removeEventListener('resize', close);
     window.removeEventListener('scroll', close, true);
     numPicker = null;
+    // Back on its button (unless you've moved on), so Tab carries on to the next box
+    const at = document.activeElement;
+    if (anchor.isConnected && (!at || at === document.body || el.contains(at))) anchor.focus({ preventScroll: true });
     onClose(seq);
   };
   const outside = e => { if (!el.contains(e.target) && !anchor.contains(e.target)) close(); };
+  // The next number, if it can go in: there's a slot left, and in one race no horse twice
+  const add = n => {
+    if (n < 1 || n > PICKER_MAX || seq.length >= info.legs || (vertical && seq.includes(n))) return;
+    seq.push(n);
+    draw();
+    if (seq.length === info.legs) setTimeout(close, 180);  // a moment to see the last number land
+  };
   el.addEventListener('click', e => {
     const n = e.target.closest('[data-n]'), act = e.target.closest('[data-np]');
-    if (n && !n.disabled) {
-      seq.push(+n.dataset.n);
-      draw();
-      if (seq.length === info.legs) setTimeout(close, 180);  // a moment to see the last number land
-    } else if (act) {
+    if (n && !n.disabled) add(+n.dataset.n);
+    else if (act) {
       if (act.dataset.np === 'done') return close();
       if (act.dataset.np === 'undo') seq.pop();
       if (act.dataset.np === 'clear') seq = [];
@@ -635,16 +707,63 @@ function openNumPicker(anchor, info, current, firstRace, onClose, title) {
   document.addEventListener('pointerdown', outside, true);
   window.addEventListener('resize', close);
   window.addEventListener('scroll', close, true);
-  numPicker = { anchor, close, undo: () => { seq.pop(); draw(); } };
+  numPicker = { anchor, close, add, undo: () => { seq.pop(); draw(); } };
 }
 
 function closeNumPicker() { if (numPicker) numPicker.close(); }
 
-// Esc closes the picker; Backspace takes back the last number
+/* ----- Typing numbers: with a Horse # or Actual winners button focused (Tab to it), typing a number opens its
+   picker, and every number typed fills the next slot. 2–9 go in at once; a 1 waits a moment in case it's
+   10–16 (or press , - / . to put it in now). Backspace takes back the last number, Enter or Tab finishes,
+   Esc closes. ----- */
+
+let keyBuf = '', keyTimer = null;
+const flushKey = () => {
+  clearTimeout(keyTimer);
+  if (keyBuf && numPicker) numPicker.add(+keyBuf);
+  keyBuf = '';
+};
+
 document.addEventListener('keydown', e => {
-  if (!numPicker) return;
-  if (e.key === 'Escape') numPicker.close();
-  else if (e.key === 'Backspace' && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)) { e.preventDefault(); numPicker.undo(); }
+  const at = document.activeElement;
+  if (!numPicker) {
+    const btn = at && at.closest && at.closest('.horse-btn:not(:disabled), .winners-btn:not(:disabled)');
+    if (!btn || !/^\d$/.test(e.key) || e.ctrlKey || e.metaKey || e.altKey) return;
+    btn.click();  // opens its picker, then this key goes in below
+    if (!numPicker) return;
+  }
+  if (at && /^(INPUT|TEXTAREA|SELECT)$/.test(at.tagName)) return;  // typing in a box, not the picker
+  if (/^\d$/.test(e.key)) {
+    e.preventDefault();
+    clearTimeout(keyTimer);
+    keyBuf += e.key;
+    if (keyBuf === '0') { keyBuf = ''; return; }
+    if (keyBuf === '1') { keyTimer = setTimeout(flushKey, 700); return; }  // maybe 10–16
+    if (+keyBuf > PICKER_MAX) {  // "17" is 1, then 7
+      const [first, second] = keyBuf;
+      keyBuf = first; flushKey();
+      keyBuf = second; flushKey();
+      return;
+    }
+    flushKey();
+  } else if ([',', '-', '/', '.'].includes(e.key)) {
+    e.preventDefault();
+    flushKey();
+  } else if (e.key === 'Enter') {
+    e.preventDefault();  // so it doesn't also press the focused button
+    if (keyBuf) flushKey();
+    else numPicker.close();
+  } else if (e.key === 'Tab') {
+    flushKey();
+    if (numPicker) numPicker.close();
+  } else if (e.key === 'Backspace') {
+    e.preventDefault();
+    if (keyBuf) { clearTimeout(keyTimer); keyBuf = ''; } else numPicker.undo();
+  } else if (e.key === 'Escape') {
+    clearTimeout(keyTimer);
+    keyBuf = '';
+    numPicker.close();
+  }
 });
 
 // The same button opens the picker, or closes it if it's already open there
@@ -658,6 +777,7 @@ function updateBetRows() {
   rows.forEach(syncPayout);
   rows.forEach(syncHorse);
   rows.forEach(syncWinners);
+  autofillWinners();
   $$('#betRows [data-remove-row]').forEach(b => { b.disabled = rows.length === 1; });
   $('#logBetsBtn').textContent = rows.length === 1 ? 'Log bet' : `Log ${rows.length} bets`;
 }
@@ -694,6 +814,7 @@ $('#betRows').addEventListener('change', e => {
   const tr = e.target.closest('tr');
   tr.querySelector('.horse-btn').dataset.picks = '';
   tr.querySelector('.winners-btn').dataset.winners = '';
+  tr.querySelector('.winners-btn').dataset.auto = '';
   autofillStake(tr);
   syncHorse(tr);
   syncWinners(tr);
@@ -703,6 +824,11 @@ $('#betRows').addEventListener('change', e => {
   if (e.target.name !== 'result') return;
   syncPayout(e.target.closest('tr'));
   syncWinners(e.target.closest('tr'));
+});
+
+// A new day, track, race, bet type or result can match a different race's finish
+$('#betRows').addEventListener('change', e => {
+  if (['date', 'track', 'race', 'type', 'result'].includes(e.target.name)) autofillWinners();
 });
 
 $('#betRows').addEventListener('click', e => {
@@ -715,8 +841,15 @@ $('#betRows').addEventListener('click', e => {
   const pick = e.target.closest('.winners-btn');
   if (pick) {
     const tr = pick.closest('tr');
+    // Winners you pick are yours (never replaced), and fill in the other bets on the same race
     return toggleNumPicker(pick, betInfo(tr.querySelector('[name=type]').value), picksOf(pick.dataset.winners), num(tr.querySelector('[name=race]').value),
-      seq => { pick.dataset.winners = seq.join(','); syncWinners(tr); });
+      seq => {
+        if (seq.join(',') === pick.dataset.winners) return;
+        pick.dataset.winners = seq.join(',');
+        pick.dataset.auto = '';
+        syncWinners(tr);
+        autofillWinners();
+      });
   }
   const btn = e.target.closest('[data-remove-row]');
   if (!btn || $$('#betRows tr').length === 1) return;
@@ -2653,8 +2786,19 @@ $('#histTable').addEventListener('click', async e => {
     return toggleNumPicker(pick, betInfo(bet.type), bet.winners, num(bet.race), seq => {
       if (seq.join() === (bet.winners || []).join()) return;
       if (seq.length) bet.winners = seq; else delete bet.winners;
+      // The same finish fills in your other lost exotics on that race that don't have winners yet
+      let filled = 0;
+      if (seq.length) {
+        const known = knownFinishes(state.bets, [bet]);
+        state.bets.forEach(o => {
+          if (o === bet || o.status !== 'lost' || !betInfo(o.type) || (o.winners && o.winners.length)) return;
+          const fill = finishFor(o, known);
+          if (fill) { o.winners = fill; filled++; }
+        });
+      }
       save();
       renderHistory();
+      if (filled) toast(`Also filled in the winners of ${filled} other bet${filled === 1 ? '' : 's'} from the same race${filled === 1 ? '' : 's'}`);
     });
   }
   const del = e.target.closest('[data-delete]');
