@@ -345,6 +345,8 @@ input[type="date"] { color-scheme: dark; }
 .xc-hint { margin: 12px 0 0; }
 .xc-panel { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
 .xc-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+/* Exotic Wagering's Open racetracks: above the top 10 */
+.open-tracks { margin-bottom: 12px; }
 .xc-head h3 { margin: 0; display: flex; align-items: center; gap: 8px; }
 .xc-panel.vertical .xc-head h3 { color: #4FD1E5; }
 .xc-panel.horizontal .xc-head h3 { color: #FFB3E6; }

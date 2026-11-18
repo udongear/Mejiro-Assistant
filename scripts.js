@@ -1334,9 +1334,34 @@ function cycleTicket(row) {
 }
 
 $('#exoticResults').addEventListener('click', e => {
+  if (e.target.closest('[data-open-tracks]')) return openTopTracks();
   const row = e.target.closest('[data-ticket]');
   if (row) cycleTicket(row);
 });
+
+/* ----- Open racetracks: each track in the top 10 on TwinSpires, one new tab apiece, at the earliest race it
+   has in the list (a Pick bet's first race). The address needs the track's TwinSpires code (ct, prx…),
+   which the capture records: /bet/program/classic/{slug}/{code}/{type}/{race}/advanced ----- */
+
+const programUrl = (p, race) => `https://www.twinspires.com/bet/program/classic/${p.slug}/${p.code}/${p.type}/${race}/advanced`;
+
+function openTopTracks() {
+  const first = new Map();  // track key → earliest race in the list
+  shownTop.forEach(r => { if (!first.has(r.key) || r.race < first.get(r.key)) first.set(r.key, r.race); });
+  let opened = 0, blocked = 0;
+  const unknown = [];
+  first.forEach((race, key) => {
+    const t = state.cards && state.cards.tracks[key];
+    if (!t || !t.program) return unknown.push(t ? t.name : key);
+    const tab = window.open(programUrl(t.program, race), '_blank');
+    if (tab) { tab.opener = null; opened++; } else blocked++;
+  });
+  toast([
+    opened ? `Opened ${opened} racetrack${opened === 1 ? '' : 's'}` : '',
+    blocked ? `${blocked} blocked: allow pop-ups for this site, then try again` : '',
+    unknown.length ? `Capture ${unknown.join(', ')} again to open ${unknown.length === 1 ? 'it' : 'them'} (captured before Mejiro saved track addresses)` : '',
+  ].filter(Boolean).join('. ') || 'Nothing to open');
+}
 $('#exoticResults').addEventListener('keydown', e => {
   const row = e.target.closest('[data-ticket]');
   if (row && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); cycleTicket(row); }
@@ -1552,6 +1577,7 @@ const chanceText = p => { const v = p * 100; return (v >= 1 ? v.toFixed(1) : v >
 const fairOdds = p => { const o = (1 - p) / p; return (o < 10 ? +o.toFixed(1) : Math.round(o)).toLocaleString() + '-1'; };
 
 let exoticPick = null;  // the wager whose top 10 shows under the tiles
+let shownTop = [];  // that top 10, for its Open racetracks button
 
 // The races a bet can use at a track: single races, or runs of consecutive races for Pick bets.
 // A race of a type that's filtered out is `hidden` (a Pick run, if any of its races is).
@@ -1590,7 +1616,7 @@ function dayTopCombos(bet, model, breeds) {
     if (o.why) return skipped.push({ track: t.name, label: o.label, why: o.why });
     searched++;
     const combos = bet.kind === 'horizontal' ? topHorizontal(o.models, o.nums) : topVertical(o.models[0], bet.legs);
-    combos.forEach(c => found.push({ ...c, track: t.name, label: o.label }));
+    combos.forEach(c => found.push({ ...c, track: t.name, key: t.key, race: o.n, label: o.label }));
   }));
   return { top: found.sort((a, b) => b.p - a.p).slice(0, CALC.results), searched, skipped, hidden, tracks: tracks.length };
 }
@@ -1623,6 +1649,7 @@ function renderExoticResults() {
   box.dataset.key = key;
 
   const { top, searched, skipped, hidden, tracks } = dayTopCombos(bet, model, breeds);
+  shownTop = top;
   const horizontal = bet.kind === 'horizontal';
   const how = ml ? `
           <li>Each horse's morning line becomes its win chance (9/2 is 2 in 11), scaled so the field adds up to 100%. A coupled entry's line is split between its horses.</li>
@@ -1644,6 +1671,9 @@ function renderExoticResults() {
         <span class="muted small-text">Searched ${horizontal ? plural(searched, `run`) + ` of ${bet.legs} races` : plural(searched, 'race')} at ${plural(tracks, 'track')}${hidden
           ? ` · ${plural(hidden, horizontal ? 'run' : 'race')} left out by race type` : ''}</span>
       </div>
+      ${top.length ? `
+        <button type="button" class="btn tiny-btn open-tracks" data-open-tracks
+          title="Opens each racetrack in this top 10 on TwinSpires, in its own tab">Open racetracks (${new Set(top.map(r => r.key)).size})</button>` : ''}
       ${top.length ? `
         <ol class="xc-results">${top.map((r, i) => {
           const ticket = ticketKey(bet, r), mark = ticketMark(ticket);
@@ -1775,10 +1805,14 @@ function mergeTrack(c) {
       ...(e.found ? { starts: int(e.starts), wins: int(e.wins), places: int(e.places), shows: int(e.shows) } : {}),
     })),
   }]));
-  // Capturing a race again replaces it; the track's other races stay
+  // Capturing a race again replaces it; the track's other races stay. `program` is its TwinSpires address
+  // parts (see programUrl), kept from an earlier capture if this one didn't have them.
+  const p = c.program, part = s => typeof s === 'string' && /^[\w%-]{1,60}$/.test(s);
   state.cards.tracks[key] = {
     name: String(c.track).slice(0, 60),
     total: int(c.total) || prev.total || null,
+    ...(p && part(p.slug) && part(p.code) && part(p.type) ? { program: { slug: p.slug, code: p.code, type: p.type } }
+      : prev.program ? { program: prev.program } : {}),
     races: { ...prev.races, ...cleaned },
   };
   return { key, name: state.cards.tracks[key].name, numbers: Object.keys(cleaned).map(Number).sort((a, b) => a - b),
@@ -2036,6 +2070,12 @@ function mejiroCapture(site) {
      the top of the page. '' when neither says; the Today's Races list row is the fallback when capturing every track. */
   const breedIn = s => /thoroughbred/i.test(s) ? 'thoroughbred' : /harness|standardbred/i.test(s) ? 'harness'
     : /quarter(?:[\s_-]|%20)*horse/i.test(s) ? 'quarter' : '';
+  /* The program's address parts, so Mejiro can open this track again: /bet/program/classic/charles-town/ct/Thoroughbred/3/advanced
+     gives { slug: 'charles-town', code: 'ct', type: 'Thoroughbred' } (the code can't be worked out from the name) */
+  const programNow = () => {
+    const m = location.pathname.match(/\/bet\/program\/[^/]+\/([\w-]+)\/([\w-]+)\/([\w%-]+)\/\d+/i);
+    return m ? { slug: m[1], code: m[2], type: m[3] } : null;
+  };
   const breedNow = () => {
     const part = location.pathname.split('/').find(p => /^(thoroughbred|harness|standardbred|quarter(?:[-_ ]|%20)?horse)$/i.test(p));
     if (part) return breedIn(part);
@@ -2262,6 +2302,7 @@ function mejiroCapture(site) {
 
   const done = (races, track, total) => {
     running = false;
+    const program = programNow();  /* this track's address, while its program is still showing */
     const all = races.flatMap(r => r.entrants);
     const found = all.filter(e => e.found).length;
     const single = races.length === 1;
@@ -2284,7 +2325,7 @@ function mejiroCapture(site) {
       const raceField = box.querySelector('#mc-race');
       if (raceField) races[0].race = +raceField.value;
       if (!name || races.some(r => !(r.race >= 1 && r.race <= 15))) { alert('Enter the track and a race number from 1 to 15.'); return null; }
-      return { track: name, total, races };
+      return { track: name, total, races, program };
     });
   };
 
@@ -2330,7 +2371,7 @@ function mejiroCapture(site) {
         show(`${prefix}opening…`);
         if (!await openFromList(t)) { failed.push(t.name); continue; }
         const { races, total } = await readCard(prefix, upcoming ? t.race : 1, t.breed);
-        if (races.length) cards.push({ track: t.name, total, races });
+        if (races.length) cards.push({ track: t.name, total, races, program: programNow() });
         else failed.push(t.name);
       }
       doneAll(cards, failed, over);
