@@ -4,7 +4,7 @@ rules_version = '2';
 // after changing this file, paste it there and click Publish.
 //
 // Each signed-in user can read and write only their own data:
-//   users/{uid}                     settings, risk matrix, strategies, view preferences
+//   users/{uid}                     settings, wager targets, old strategy notes, view preferences
 //   users/{uid}/bets/{betId}        one document per bet
 //   users/{uid}/racecards/{date}    that day's races captured from TwinSpires
 service cloud.firestore {

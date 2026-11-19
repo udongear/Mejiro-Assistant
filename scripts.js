@@ -6,17 +6,8 @@
 // Where the pre-account version kept its data in this browser (offered for import on first sign-in)
 const STORAGE_KEY = 'mejiro.v1';
 
-// [portfolio size ($), risk %]
-const DEFAULT_MATRIX = [
-  [2, 100], [5, 75], [10, 66], [20, 50], [50, 33], [100, 20],
-  [500, 5], [1000, 3.33], [10000, 1], [25000, 0.66], [50000, 0.5], [100000, 0.33],
-].map(([size, pct]) => ({ size, pct }));
-
-
 const DEFAULT_SETTINGS = {
   startingBankroll: 100,
-  minBet: 2,
-  roundTo: 1,
 };
 
 /* ---------- State ---------- */
@@ -28,7 +19,6 @@ function freshState() {
     user: null,
     bets: [],
     exoticInfo: {},  // your edits to the exotic wager table (Wagering → Exotic → More Info): { "Exacta": { min, payout } }
-    matrix: DEFAULT_MATRIX.map(t => ({ ...t })),
     settings: { ...DEFAULT_SETTINGS },
   };
 }
@@ -52,7 +42,7 @@ function readLocalState() {
 
 // strategies and strategyCategories are notes from the old Strategies tab: no longer shown, but kept
 // (the prefs document is rewritten whole on save, so dropping them here would delete them)
-const PREF_KEYS = ['settings', 'matrix', 'rateView', 'strategies', 'strategyCategories', 'racesShown', 'exoticInfo', 'exoticField', 'exoticModel', 'exoticBreeds', 'exoticTargets', 'earningsView', 'haltedWagers'];
+const PREF_KEYS = ['settings', 'rateView', 'strategies', 'strategyCategories', 'racesShown', 'exoticInfo', 'exoticField', 'exoticModel', 'exoticBreeds', 'exoticTargets', 'earningsView', 'haltedWagers', 'basicTargets'];
 
 let fb = null;  // { auth, db } once Firebase is set up
 let synced = { prefs: '', bets: new Map(), cards: '' };  // last known Firestore copy (bet id → JSON)
@@ -149,12 +139,6 @@ function money(n, signed = false) {
 
 function plClass(n) { return n > 0 ? 'profit' : n < 0 ? 'loss' : ''; }
 
-function fmtSize(n) {
-  if (n >= 1000 && n % 1000 === 0) return '$' + n / 1000 + 'k';
-  if (n >= 1000) return '$' + +(n / 1000).toFixed(2) + 'k';
-  return '$' + n;
-}
-
 function fmtDate(iso) {
   if (!iso) return '';
   const [y, m, d] = iso.split('-').map(Number);
@@ -190,27 +174,6 @@ function balanceOn(date, byDay = dailyResults()) {
 }
 function bankroll() { return balanceOn(today()); }
 
-function sortedMatrix() { return [...state.matrix].sort((a, b) => a.size - b.size); }
-
-function currentTier(br = bankroll()) {
-  const tiers = sortedMatrix();
-  if (!tiers.length) return null;
-  let tier = tiers[0];
-  for (const t of tiers) if (br >= t.size) tier = t;
-  return tier;
-}
-
-
-function suggestedStake() {
-  const tier = currentTier();
-  const { minBet, roundTo } = state.settings;
-  if (!tier) return num(minBet);
-  const raw = Math.max(0, bankroll()) * tier.pct / 100;
-  const step = num(roundTo) || 0.01;
-  const rounded = Math.floor(raw / step + 1e-9) * step;
-  return +Math.max(num(minBet), rounded).toFixed(2);
-}
-
 /* ---------- Toast / modal / tooltip ---------- */
 
 let toastTimer;
@@ -224,6 +187,7 @@ function toast(msg) {
 
 function openModal(html, { bare = false, wide = false } = {}) {
   $('#modalBody').onclick = null;
+  $('#modalBody').onchange = null;
   $('#modalBody').innerHTML = html;
   $('.modal-card').classList.toggle('bare', bare);
   $('.modal-card').classList.toggle('wide', wide);
@@ -379,7 +343,6 @@ function renderAll() {
   syncBetTypes();
   renderTracker();
   renderRaces();
-  renderMatrix();
   renderExoticTable();
   renderHistory();
   renderSettings();
@@ -474,14 +437,8 @@ setInterval(() => { if (state.user && racesView.date !== today()) renderRaces();
 
 function renderTracker() {
   renderWinRate();
-  const br = bankroll();
-  const tier = currentTier(br);
-  // Percent Risk, Balance in the middle, Suggested stake (from the Risk Matrix in Settings)
   $('#stats').innerHTML = `
-    <div class="stat"><div class="label">Percent Risk</div><div class="value">${tier ? tier.pct + '%' : '—'}</div></div>
-    <div class="stat accent balance"><div class="label">Balance</div><div class="value">${money(br)}</div></div>
-    <div class="stat"><div class="label">Suggested stake</div><div class="value stake-value">${money(suggestedStake())}</div></div>`;
-  renderWagerTiles();  // Basic's target wager is the suggested stake
+    <div class="stat accent balance"><div class="label">Balance</div><div class="value">${money(bankroll())}</div></div>`;
 }
 
 /* ----- Log bets: one row per bet, each with its own date ----- */
@@ -804,13 +761,14 @@ $('#addBetRow').addEventListener('click', () => {
   row.querySelector(['date', 'track', 'race'].map(n => `[name=${n}]`).find(s => !row.querySelector(s).value) || '[name=race]').focus();
 });
 
-// Exotic stake starts at the wager's target wager (More Info's Wager column, shown above its tile).
-// It follows the bet type until you type your own amount.
+// Stake starts at the wager's target wager (its More Info's Wager column, shown above its tile on
+// Wagering). It follows the bet type until you type your own amount.
 function autofillStake(tr) {
   const stake = tr.querySelector('[name=stake]');
   const type = tr.querySelector('[name=type]').value;
   if (stake.value !== '' && stake.value !== stake.dataset.auto) return;
-  stake.value = isExoticType(type) ? +exoticTarget(type).toFixed(2) : '';
+  const basic = BASIC_INFO.some(d => d.name === type);
+  stake.value = basic || isExoticType(type) ? +(basic ? basicTarget(type) : exoticTarget(type)).toFixed(2) : '';
   stake.dataset.auto = stake.value;
 }
 
@@ -906,7 +864,6 @@ $('#betForm').addEventListener('submit', e => {
   save();
   renderTrackSelects();
   renderTracker();
-  renderMatrix();
   renderHistory();
   resetBetForm();
   const pl = logged.reduce((s, b) => s + profitOf(b), 0);
@@ -1090,7 +1047,6 @@ function settleBet(bet, status, payout) {
   bet.settledAt = new Date().toISOString();
   save();
   renderTracker();
-  renderMatrix();
   renderHistory();
   const p = profitOf(bet);
   toast(status === 'scratched' ? 'Marked as scratched (stake returned)' : `Settled: ${money(p, true)}`);
@@ -1291,25 +1247,28 @@ $('#racesTracks').addEventListener('click', async e => {
 /* ----- Wagering tiles: Basic (Win, Place, Show) on the left, Exotic on the right, each easiest to
    hardest by its difficulty stars and colored by kind: basic in lavender, vertical (one race) in cyan,
    horizontal (several races) in pink. Each shows today's 10 most likely tickets for that wager
-   underneath. Above it: its target wager (Basic: the Tracker's suggested stake; Exotic: More Info's
-   Wager column) and a checkbox. Unchecking it halts that wager: greyed out as a reminder not to
-   play it for now, until it's checked again (state.haltedWagers). ----- */
+   underneath. Above it, in two parts: a checkbox on the left, and its target wager on the right (the
+   Wager column of its section's More Info, editable there). Unchecking the box halts that wager:
+   greyed out as a reminder not to play it for now, until it's checked again (state.haltedWagers). ----- */
 
 const isHalted = name => (state.haltedWagers || []).includes(name);
-const wagerTarget = d => (d.kind === 'basic' ? suggestedStake() : exoticTarget(d.name));
+const wagerTarget = d => (d.kind === 'basic' ? basicTarget(d.name) : exoticTarget(d.name));
 
 function wagerSlotHTML(d, max) {
   const halted = isHalted(d.name);
-  const where = d.kind === 'basic' ? 'your suggested stake on the Tracker (balance × the Risk Matrix %)' : 'More Info → Edit numbers';
   return `
     <div class="exotic-slot ${halted ? 'halted' : ''}" data-slot="${esc(d.name)}">
       <div class="target-wager ${d.kind}">
-        <label class="halt-check" title="${halted ? `${esc(d.name)} is halted. Check to play it again` : `Uncheck to halt ${esc(d.name)} for now`}">
-          <input type="checkbox" data-halt="${esc(d.name)}" ${halted ? '' : 'checked'} aria-label="Play ${esc(d.name)} (uncheck to halt it)">
-          <span class="halt-box" aria-hidden="true">${CHECK_SVG}</span>
-        </label>
-        <span class="target-label" title="How much you mean to stake on each ${esc(d.name)}: ${where}">Target wager</span>
-        <b class="target-amount">${money(wagerTarget(d))}</b>
+        <div class="tw-check">
+          <label class="halt-check" title="${halted ? `${esc(d.name)} is halted. Check to play it again` : `Uncheck to halt ${esc(d.name)} for now`}">
+            <input type="checkbox" data-halt="${esc(d.name)}" ${halted ? '' : 'checked'} aria-label="Play ${esc(d.name)} (uncheck to halt it)">
+            <span class="halt-box" aria-hidden="true">${CHECK_SVG}</span>
+          </label>
+        </div>
+        <div class="tw-text" title="How much you mean to stake on each ${esc(d.name)}. Change it in More Info → Edit numbers.">
+          <span class="target-label">Target wager</span>
+          <b class="target-amount">${money(wagerTarget(d))}</b>
+        </div>
       </div>
       <button type="button" class="exotic-tile ${d.kind}" data-calc="${esc(d.name)}" title="Today's 10 most likely ${esc(d.name)} tickets">
         <span class="tile-play" aria-hidden="true">${PLAY_SVG}</span>
@@ -2502,122 +2461,6 @@ function mejiroCapture(site) {
   box.querySelector('#mc-every').onclick = chooseTracks;
 }
 
-/* =========================================================
-   Risk Matrix (in Settings): the % of the balance the Tracker suggests staking, by bankroll size
-   ========================================================= */
-
-function renderMatrix() {
-  const tiers = sortedMatrix();
-  const br = bankroll();
-  const cur = currentTier(br);
-  $('#matrixCurrent').textContent = cur ? `Bankroll ${money(br)} → ${cur.pct}% risk` : '';
-
-  // Chart: one series, one bar per tier; current tier highlighted
-  const W = 760, H = 260, padL = 40, padR = 8, padT = 22, padB = 30;
-  const plotW = W - padL - padR, plotH = H - padT - padB;
-  const maxY = Math.max(100, ...tiers.map(t => t.pct));
-  const band = tiers.length ? plotW / tiers.length : plotW;
-  const barW = Math.min(44, band - 6);
-  const y = v => padT + plotH - (v / maxY) * plotH;
-
-  const grid = [0, 25, 50, 75, 100].filter(v => v <= maxY).map(v => `
-    <g class="grid"><line x1="${padL}" x2="${W - padR}" y1="${y(v)}" y2="${y(v)}"/></g>
-    <g class="axis"><text x="${padL - 8}" y="${y(v) + 4}" text-anchor="end">${v}%</text></g>`).join('');
-
-  const bars = tiers.map((t, i) => {
-    const cx = padL + band * i + band / 2;
-    const top = y(t.pct), h = Math.max(2, padT + plotH - top);
-    const r = Math.min(4, h / 2, barW / 2);
-    const x0 = cx - barW / 2, base = padT + plotH;
-    // Rounded top, square base
-    const d = `M${x0},${base}V${base - h + r}Q${x0},${base - h} ${x0 + r},${base - h}H${x0 + barW - r}Q${x0 + barW},${base - h} ${x0 + barW},${base - h + r}V${base}Z`;
-    const isCur = cur && t.size === cur.size && t.pct === cur.pct;
-    return `
-      <g class="col" data-i="${i}">
-        <rect class="hit" x="${padL + band * i}" y="${padT}" width="${band}" height="${plotH + padB}"/>
-        <path class="bar ${isCur ? 'current' : ''}" d="${d}"/>
-        <text class="bar-label" x="${cx}" y="${base - h - 6}">${t.pct}%</text>
-        <g class="axis"><text x="${cx}" y="${H - 10}" text-anchor="middle">${fmtSize(t.size)}</text></g>
-      </g>`;
-  }).join('');
-
-  $('#matrixChart').innerHTML = tiers.length
-    ? `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Risk percentage by portfolio size">${grid}${bars}</svg>`
-    : '<p class="muted">No tiers. Add one below.</p>';
-
-  $$('#matrixChart g.col').forEach(g => {
-    const t = tiers[+g.dataset.i];
-    g.addEventListener('mousemove', e => showTip(
-      `<b>${fmtSize(t.size)}+ portfolio</b>Risk ${t.pct}% · ${money(t.size * t.pct / 100)} stake at tier start`,
-      e.clientX, e.clientY));
-    g.addEventListener('mouseleave', hideTip);
-  });
-}
-
-// Tiers are edited in a popup; nothing changes until Save (closing it any other way discards the edits)
-function openTierEditor() {
-  const cur = currentTier();
-  let draft = sortedMatrix().map(t => ({ ...t, current: t === cur }));
-  openModal(`
-    <h3>Edit tiers</h3>
-    <p class="small-text">A tier applies once your bankroll reaches its portfolio size. Below the smallest tier, the smallest tier's risk % is used.
-      Your current tier is highlighted.</p>
-    <div class="table-wrap"><table class="table tier-table">
-      <thead><tr><th>Portfolio size ($)</th><th>Risk %</th><th class="num">Stake at tier start</th><th></th></tr></thead>
-      <tbody id="tierRows"></tbody>
-    </table></div>
-    <div class="tier-tools">
-      <button class="btn" id="tierAdd" type="button">+ Add tier</button>
-      <button class="btn ghost" id="tierDefaults" type="button">Reset to defaults</button>
-    </div>
-    <div class="modal-actions">
-      <button class="btn ghost" id="tierCancel" type="button">Cancel</button>
-      <button class="btn primary" id="tierSave" type="button">Save</button>
-    </div>`, { wide: true });
-
-  const body = $('#tierRows');
-  const draw = () => {
-    body.innerHTML = draft.map((t, i) => `
-      <tr class="${t.current ? 'current' : ''}">
-        <td><input type="number" min="0" step="any" value="${t.size}" data-i="${i}" data-field="size" aria-label="Portfolio size"></td>
-        <td><input type="number" min="0" max="100" step="any" value="${t.pct}" data-i="${i}" data-field="pct" aria-label="Risk percent"></td>
-        <td class="num" data-stake="${i}">${money(t.size * t.pct / 100)}</td>
-        <td><button class="btn tiny-btn ghost danger" type="button" data-remove="${i}" title="Remove tier">✕</button></td>
-      </tr>`).join('') || '<tr><td colspan="4" class="empty">No tiers. Add one below.</td></tr>';
-  };
-  draw();
-  // Typing updates the stake as you go; rows re-sort by size when you save
-  body.oninput = e => {
-    const inp = e.target.closest('input[data-i]');
-    if (!inp) return;
-    const t = draft[+inp.dataset.i];
-    t[inp.dataset.field] = num(inp.value);
-    $(`[data-stake="${inp.dataset.i}"]`).textContent = money(t.size * t.pct / 100);
-  };
-  body.onclick = e => {
-    const b = e.target.closest('[data-remove]');
-    if (!b) return;
-    draft.splice(+b.dataset.remove, 1);
-    draw();
-  };
-  $('#tierAdd').onclick = () => {
-    const last = [...draft].sort((a, b) => a.size - b.size).pop();
-    draft.push({ size: last ? last.size * 2 : 2, pct: last ? last.pct : 100 });
-    draw();
-    $$('#tierRows input[data-field="size"]').pop().focus();
-  };
-  $('#tierDefaults').onclick = () => { draft = DEFAULT_MATRIX.map(t => ({ ...t })); draw(); };
-  $('#tierCancel').onclick = closeModal;
-  $('#tierSave').onclick = () => {
-    state.matrix = draft.map(({ size, pct }) => ({ size, pct })).sort((a, b) => a.size - b.size);
-    save(); renderMatrix(); renderTracker();
-    closeModal();
-    toast('Tiers saved');
-  };
-}
-
-$('#editTiers').addEventListener('click', openTierEditor);
-
 /* ----- Exotic wagers at a glance (Wagering → Exotic → More Info): a sortable reference table. Difficulty
    is a fixed 1–5 ranking (no two bets share one). Wager is your target wager for each bet, shown above
    its tile: it starts at the bet's minimum and, like the average payout, is yours to change (Edit numbers).
@@ -2648,17 +2491,23 @@ const EXOTIC_INFO = [
 ];
 const EXOTIC_SHOWN = EXOTIC_INFO.filter(d => !d.retired);
 
-// Basic wagers, for the Wagering tab's left side. Their target wager is the Tracker's suggested stake.
-// Stars run 1–3 among the three.
+// Basic wagers, for the Wagering tab's left side. Stars run 1–3 among the three. `min` is the usual
+// minimum ticket, where each target wager starts (state.basicTargets holds yours: { "Win": 5 }).
 const BASIC_INFO = [
-  { name: 'Win', kind: 'basic', legs: 1, stars: 3, short: 'Finishes 1st',
+  { name: 'Win', kind: 'basic', legs: 1, stars: 3, min: 2, short: 'Finishes 1st',
     about: 'Your horse has to win. It pays the most of the three, and hits least often.' },
-  { name: 'Place', kind: 'basic', legs: 2, stars: 2, short: 'Finishes 1st or 2nd',
+  { name: 'Place', kind: 'basic', legs: 2, stars: 2, min: 2, short: 'Finishes 1st or 2nd',
     about: 'Your horse has to finish 1st or 2nd. It pays the same either way, usually less than a win.' },
-  { name: 'Show', kind: 'basic', legs: 3, stars: 1, short: 'Finishes 1st, 2nd or 3rd',
+  { name: 'Show', kind: 'basic', legs: 3, stars: 1, min: 2, short: 'Finishes 1st, 2nd or 3rd',
     about: 'Your horse has to finish in the top 3. It hits most often and pays the least.' },
 ];
 const wagerInfo = name => BASIC_INFO.find(d => d.name === name) || EXOTIC_SHOWN.find(d => d.name === name);
+
+// Target wager for Win / Place / Show: shown above its tile and filled in as the stake in Log bets
+const basicTarget = name => {
+  const d = BASIC_INFO.find(x => x.name === name);
+  return d ? (state.basicTargets || {})[name] ?? d.min : 0;
+};
 const EXOTIC_COLS = [
   ['name', 'Bet name'], ['stars', 'Difficulty to land'], ['min', 'Wager', 'Your target wager, shown above the bet\'s tile'],
   ['payout', 'Avg payout'], ['roi', 'ROI (payout ÷ wager)'],
@@ -2782,31 +2631,57 @@ $('#exoticMoreInfo').addEventListener('click', () => {
   $('#exoticInfoModal').classList.remove('hidden');
 });
 
-// Basic's More Info: a short look at Win, Place and Show, and where their target wager comes from
-$('#basicMoreInfo').addEventListener('click', () => {
-  const tier = currentTier(bankroll());
+// Basic's More Info: Win, Place and Show at a glance, with their target wagers (the Wager column),
+// editable like the exotic table's: Edit numbers, then type. Each change saves as you go.
+let basicEditing = false;
+
+function openBasicInfo() {
+  const wager = d => basicEditing
+    ? `<input type="number" class="w-sm" min="0" step="0.01" data-basic="${esc(d.name)}" value="${basicTarget(d.name)}" aria-label="${esc(d.name)} wager">`
+    : money(basicTarget(d.name));
   openModal(`
     <div class="card-head">
       <h3>Basic wagers at a glance</h3>
-      <button class="btn tiny-btn ghost" data-close-basic type="button" aria-label="Close">✕</button>
+      <div class="btn-row">
+        <button class="btn tiny-btn" data-basic-edit type="button">${basicEditing ? 'Done' : 'Edit numbers'}</button>
+        <button class="btn tiny-btn ghost" data-basic-reset type="button">Reset</button>
+        <button class="btn tiny-btn ghost" data-close-basic type="button" aria-label="Close">✕</button>
+      </div>
     </div>
-    <p class="callout"><b>Target wager</b> on Win, Place and Show is your <b>suggested stake</b> from the Tracker:
-      your balance (${money(bankroll())}) × your Risk Matrix % (${tier ? tier.pct + '%' : '—'}) = ${money(suggestedStake())}.
-      It moves as your balance does. Change the % in <b>Settings → Risk Matrix</b>.</p>
+    <p class="callout"><b>Wager</b> is your target wager for each bet, shown above its tile on Wagering and filled in as the stake in Log bets.
+      Each starts at $2, the usual minimum ticket ($1 at some tracks); change it with <b>Edit numbers</b>.</p>
     <div class="table-wrap"><table class="table">
-      <thead><tr><th>Bet name</th><th>Difficulty to land</th><th>Pays when your horse</th><th>How it works</th></tr></thead>
+      <thead><tr><th>Bet name</th><th>Difficulty to land</th><th class="num">Wager</th><th>Pays when your horse</th><th>How it works</th></tr></thead>
       <tbody>${BASIC_INFO.map(d => `
         <tr><td class="bet-cell basic"><b>${esc(d.name)}</b></td><td>${starsHTML(d.stars, BASIC_INFO.length)}</td>
+          <td class="num">${wager(d)}</td>
           <td>${esc(d.short.replace(/^Finishes/, 'finishes'))}</td><td class="muted small-text">${esc(d.about)}</td></tr>`).join('')}</tbody>
     </table></div>
     <p class="muted small-text">Each is one horse in one race. The top 10 under each tile is today's horses most likely to land it,
-      using the model and race types chosen at the top of the tab. The usual minimum ticket is $2 ($1 at some tracks).</p>
-    <div class="modal-actions">
-      <button class="btn ghost" type="button" data-goto="settings" data-close-basic>Go to Risk Matrix</button>
-      <button class="btn primary" type="button" data-close-basic>Done</button>
-    </div>`, { wide: true });
-  $('#modalBody').onclick = e => { if (e.target.closest('[data-close-basic]')) closeModal(); };
-});
+      using the model and race types chosen at the top of the tab.</p>`, { wide: true });
+  $('#modalBody').onclick = async e => {
+    if (e.target.closest('[data-close-basic]')) { basicEditing = false; return closeModal(); }
+    if (e.target.closest('[data-basic-edit]')) { basicEditing = !basicEditing; return openBasicInfo(); }
+    if (e.target.closest('[data-basic-reset]')) {
+      // The confirmation uses the same popup, so this one opens again after it
+      const ok = await confirmModal('Reset basic wagers?', 'Puts Win, Place and Show back to $2.', 'Reset');
+      if (ok) {
+        state.basicTargets = {};
+        save();
+        renderWagerTiles();
+      }
+      openBasicInfo();
+    }
+  };
+  $('#modalBody').onchange = e => {
+    const inp = e.target.closest('[data-basic]');
+    if (!inp) return;
+    state.basicTargets = { ...(state.basicTargets || {}), [inp.dataset.basic]: Math.max(0, num(inp.value)) };
+    save();
+    renderWagerTiles();
+  };
+}
+$('#basicMoreInfo').addEventListener('click', () => { basicEditing = false; openBasicInfo(); });
 $('#exoticInfoClose').addEventListener('click', closeExoticInfo);
 $('#exoticInfoModal').addEventListener('mousedown', e => { if (e.target.id === 'exoticInfoModal') closeExoticInfo(); });
 // Esc closes it, unless a confirmation (like Reset's) is open on top of it. Checked before the general
@@ -3054,7 +2929,7 @@ $('#histTable').addEventListener('click', async e => {
   if (del) {
     if (!await confirmModal('Delete bet?', 'This removes it permanently.', 'Delete', true)) return;
     state.bets = state.bets.filter(b => b.id !== del.dataset.delete);
-    save(); renderHistory(); renderTracker(); renderMatrix();
+    save(); renderHistory(); renderTracker();
     return;
   }
   const settle = e.target.closest('[data-settle]');
@@ -3069,7 +2944,7 @@ $('#histTable').addEventListener('click', async e => {
   bet.status = 'open';
   bet.payout = 0;
   delete bet.settledAt;
-  save(); renderHistory(); renderTracker(); renderMatrix();
+  save(); renderHistory(); renderTracker();
   toast('Result cleared — set it again with Won, Lost or Scratch');
 });
 
@@ -3127,7 +3002,6 @@ $('#settingsForm').addEventListener('submit', e => {
   state.settings = {
     ...state.settings,
     startingBankroll: num(f.startingBankroll.value),
-    roundTo: num(f.roundTo.value),
   };
   save(); renderAll();
   toast('Settings saved');
@@ -3155,7 +3029,7 @@ $('#restoreInput').addEventListener('change', async e => {
 });
 
 $('#resetAllBtn').addEventListener('click', async () => {
-  if (!await confirmModal('Reset everything?', 'Deletes all bets, tiers and settings from your account. Export a backup first if you want to keep them.', 'Reset all', true)) return;
+  if (!await confirmModal('Reset everything?', 'Deletes all bets and settings from your account. Export a backup first if you want to keep them.', 'Reset all', true)) return;
   const user = state.user;
   state = { ...freshState(), user };
   save(); renderAll(); resetBetForm();

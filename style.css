@@ -124,14 +124,8 @@ a { color: var(--cyan); }
 .stat .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
 .stat .value { font: 600 24px/1.3 var(--display); margin-top: 4px; font-variant-numeric: tabular-nums; }
 .stat .sub { color: var(--muted); font-size: 12px; }
-/* The Tracker's Percent Risk, Balance and Suggested stake: one row of three at every width */
-.stats.trio { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-@media (max-width: 640px) {
-  .stats.trio { gap: 6px; }
-  .stats.trio .stat { padding: 10px 8px; text-align: center; }
-  .stats.trio .label { font-size: 10px; letter-spacing: .03em; }
-  .stats.trio .value { font-size: 17px; overflow-wrap: anywhere; }
-}
+/* The Tracker's Balance, on its own */
+.stats.solo { grid-template-columns: minmax(0, 1fr); }
 .stat.accent { border-color: var(--violet); background: linear-gradient(160deg, rgba(123, 97, 255, .18), var(--surface) 70%); }
 
 /* ---------- Forms ---------- */
@@ -336,7 +330,6 @@ input[type="date"] { color-scheme: dark; }
 .halt-box svg { width: 13px; height: 13px; }
 .halt-check input:not(:checked) + .halt-box { border-color: var(--muted); background: transparent; color: transparent; }
 .halt-check input:focus-visible + .halt-box { outline: 2px solid var(--violet); outline-offset: 2px; }
-.target-label { margin-right: auto; }
 .exotic-slot.halted .target-label, .exotic-slot.halted .target-amount { opacity: .45; }
 .exotic-slot.halted .exotic-tile { filter: grayscale(1); opacity: .45; }
 .exotic-slot.halted .exotic-tile:hover, .exotic-slot.halted .exotic-tile.active { opacity: .7; }
@@ -349,11 +342,13 @@ input[type="date"] { color-scheme: dark; }
 .halt-note { margin: 0 0 12px; padding: 8px 12px; border-radius: 10px; background: var(--surface-2); border: 1px dashed var(--muted); color: var(--muted); font-size: 13px; }
 .exotic-slot { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .exotic-slot .exotic-tile { flex: 1; }
+/* Target wager, in two parts: the halt checkbox on the left, a divider, then the label and amount centered on the right */
 .target-wager {
-  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 4px 6px; padding: 6px 8px 6px 10px;
-  border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border);
+  display: flex; align-items: stretch; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border);
   color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase;
 }
+.tw-check { display: flex; align-items: center; justify-content: center; flex-shrink: 0; padding: 6px 9px; border-right: 1px solid var(--border); }
+.tw-text { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; padding: 6px 6px; text-align: center; }
 .target-wager.basic { border-left: 3px solid var(--lavender); }
 .target-wager.vertical { border-left: 3px solid #4FD1E5; }
 .target-wager.horizontal { border-left: 3px solid #FFB3E6; }
@@ -550,17 +545,6 @@ input[type="date"] { color-scheme: dark; }
 .badge.scratched { background: var(--surface-2); color: var(--muted); }
 .badge.open { background: rgba(200, 180, 255, .14); color: var(--lavender); }
 
-/* ---------- Chart ---------- */
-.chart { position: relative; width: 100%; }
-.chart svg { display: block; width: 100%; height: auto; overflow: visible; }
-.chart .axis text { fill: var(--muted); font: 11px var(--font); }
-.chart .grid line { stroke: var(--border); stroke-width: 1; }
-.chart .bar { fill: var(--violet); transition: opacity .15s; }
-.chart .bar.current { fill: var(--cyan); }
-.chart .bar-label { fill: var(--text); font: 600 11px var(--font); text-anchor: middle; }
-.chart .hit { fill: transparent; cursor: pointer; }
-.chart .hit:hover + .bar, .chart g.col:hover .bar { opacity: .8; }
-
 .tooltip {
   position: fixed; z-index: 60; pointer-events: none;
   background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px;
@@ -578,10 +562,6 @@ input[type="date"] { color-scheme: dark; }
 /* A confirmation (like Reset's) opens above the More Info popup */
 #modal { z-index: 55; }
 #exoticInfoModal .modal-card { max-width: 1000px; max-height: min(calc(90vh + 50px), calc(100vh - 32px)); }
-.card-head-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.tier-table input { width: 130px; padding: 7px 9px; }
-.tier-table td { padding: 6px 8px; }
-.tier-tools { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
 .modal-card h3 { font-size: 18px; color: var(--lavender); }
 .modal-card p { color: var(--muted); }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; flex-wrap: wrap; }
@@ -654,6 +634,3 @@ input[type="date"] { color-scheme: dark; }
 /* Wagering: the tab title */
 .head-title { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .head-title h2 { margin: 0; }
-/* Settings: the Risk Matrix's explanation */
-.matrix-intro { margin: 0 0 12px; max-width: 860px; line-height: 1.6; }
-.matrix-intro b { color: var(--text); }
