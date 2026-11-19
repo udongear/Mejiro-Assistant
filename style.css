@@ -249,7 +249,7 @@ input[type="date"] { color-scheme: dark; }
   .races-layout { grid-template-columns: 1fr; }
 }
 
-/* Exotic wagers at a glance (Exotic Wagering → More Info) */
+/* Exotic wagers at a glance (Wagering → Exotic → More Info) */
 .sort-btn {
   display: inline-flex; align-items: center; gap: 5px; padding: 0; border: 0; background: none;
   color: inherit; font: inherit; cursor: pointer;
@@ -268,10 +268,13 @@ input[type="date"] { color-scheme: dark; }
   display: inline-block; padding: 2px 7px; border-radius: 999px; font: 600 10px/1.4 var(--font);
   letter-spacing: .04em; text-transform: uppercase; vertical-align: middle;
 }
+.kind-tag.basic { color: var(--lavender); background: rgba(200, 180, 255, .12); border: 1px solid rgba(200, 180, 255, .4); }
 .kind-tag.vertical { color: #4FD1E5; background: rgba(79, 209, 229, .12); border: 1px solid rgba(79, 209, 229, .4); }
 .kind-tag.horizontal { color: #FFB3E6; background: rgba(255, 179, 230, .12); border: 1px solid rgba(255, 179, 230, .4); }
 .tooltip .kind-tag { margin-left: 4px; }
 .bet-cell { border-left: 3px solid transparent; }
+.bet-cell.basic { border-left-color: var(--lavender); }
+.bet-cell.basic b { color: var(--lavender); }
 .bet-cell.vertical { border-left-color: #4FD1E5; }
 .bet-cell.horizontal { border-left-color: #FFB3E6; }
 .bet-cell.vertical .bet-name b { color: #4FD1E5; }
@@ -305,12 +308,45 @@ input[type="date"] { color-scheme: dark; }
 .roi-track span { display: block; height: 100%; border-radius: 4px; background: linear-gradient(90deg, var(--violet), var(--lavender)); }
 @media (max-width: 640px) { .roi-track { width: 70px; } }
 
-/* Exotic Wagering tiles, each opening its calculator: the six spread evenly across the card (three
-   across, then two, as it narrows), each with its target wager on top */
+/* Wagering tiles, each opening its calculator, in two sections side by side: Basic (3 tiles) and Exotic
+   (5), each tile the same width. Below 900px the sections stack; Exotic then wraps to three, then two
+   across. Each tile has its target wager and halt checkbox on top. */
 .exotic-card { margin-top: 0; container-type: inline-size; }
-.exotic-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
-@container (max-width: 900px) { .exotic-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.wager-sections { display: grid; grid-template-columns: 3fr 5fr; gap: 10px 20px; }
+.wager-section { min-width: 0; }
+.wager-section + .wager-section { padding-left: 20px; border-left: 1px solid var(--border); }
+.wager-section-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.wager-section-head h3 { margin: 0; font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.exotic-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+.exotic-grid.basic-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@container (max-width: 900px) {
+  .wager-sections { grid-template-columns: 1fr; gap: 18px; }
+  .wager-section + .wager-section { padding-left: 0; border-left: 0; padding-top: 16px; border-top: 1px solid var(--border); }
+}
+@container (max-width: 700px) { .exotic-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @container (max-width: 460px) { .exotic-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@container (max-width: 360px) { .exotic-grid.basic-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+/* Halt: unchecking a wager's box greys it out (still clickable) until it's checked again */
+.halt-check { position: relative; display: inline-flex; flex-shrink: 0; cursor: pointer; }
+.halt-check input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+.halt-box {
+  display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 5px;
+  border: 1.5px solid var(--profit); background: rgba(61, 220, 132, .15); color: var(--profit); transition: background .15s, border-color .15s;
+}
+.halt-box svg { width: 13px; height: 13px; }
+.halt-check input:not(:checked) + .halt-box { border-color: var(--muted); background: transparent; color: transparent; }
+.halt-check input:focus-visible + .halt-box { outline: 2px solid var(--violet); outline-offset: 2px; }
+.target-label { margin-right: auto; }
+.exotic-slot.halted .target-label, .exotic-slot.halted .target-amount { opacity: .45; }
+.exotic-slot.halted .exotic-tile { filter: grayscale(1); opacity: .45; }
+.exotic-slot.halted .exotic-tile:hover, .exotic-slot.halted .exotic-tile.active { opacity: .7; }
+.tile-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.exotic-tile .tile-tags .kind-tag { margin-top: 0; }
+.halt-tag {
+  display: inline-block; padding: 2px 7px; border-radius: 999px; font: 600 10px/1.4 var(--font); letter-spacing: .04em;
+  text-transform: uppercase; color: var(--muted); border: 1px solid var(--muted);
+}
+.halt-note { margin: 0 0 12px; padding: 8px 12px; border-radius: 10px; background: var(--surface-2); border: 1px dashed var(--muted); color: var(--muted); font-size: 13px; }
 .exotic-slot { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .exotic-slot .exotic-tile { flex: 1; }
 .target-wager {
@@ -318,6 +354,7 @@ input[type="date"] { color-scheme: dark; }
   border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border);
   color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase;
 }
+.target-wager.basic { border-left: 3px solid var(--lavender); }
 .target-wager.vertical { border-left: 3px solid #4FD1E5; }
 .target-wager.horizontal { border-left: 3px solid #FFB3E6; }
 .target-amount { color: var(--text); font: 600 14px var(--font); letter-spacing: 0; text-transform: none; font-variant-numeric: tabular-nums; }
@@ -333,6 +370,7 @@ input[type="date"] { color-scheme: dark; }
 .exotic-tile b { color: var(--lavender); font-size: 15px; }
 .exotic-tile .tile-desc { color: var(--muted); font-size: 12px; }
 .exotic-tile .stars { font-size: 13px; letter-spacing: 1px; }
+.exotic-tile.basic { border-left: 3px solid var(--lavender); }
 .exotic-tile.vertical { border-left: 3px solid #4FD1E5; }
 .exotic-tile.horizontal { border-left: 3px solid #FFB3E6; }
 .exotic-tile.vertical b { color: #4FD1E5; }
@@ -345,9 +383,10 @@ input[type="date"] { color-scheme: dark; }
 .xc-hint { margin: 12px 0 0; }
 .xc-panel { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
 .xc-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
-/* Exotic Wagering's Open racetracks: above the top 10 */
+/* Wagering's Open racetracks: above the top 10 */
 .open-tracks { margin-bottom: 12px; }
 .xc-head h3 { margin: 0; display: flex; align-items: center; gap: 8px; }
+.xc-panel.basic .xc-head h3 { color: var(--lavender); }
 .xc-panel.vertical .xc-head h3 { color: #4FD1E5; }
 .xc-panel.horizontal .xc-head h3 { color: #FFB3E6; }
 /* Which model built the top 10: Life Stat Model or ML Model (the toggle at the top of the tab) */
@@ -612,7 +651,7 @@ input[type="date"] { color-scheme: dark; }
   .cal-bal { font-size: 13px; }
 }
 
-/* Exotic Wagering: the title with its More Info button */
+/* Wagering: the tab title */
 .head-title { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .head-title h2 { margin: 0; }
 /* Settings: the Risk Matrix's explanation */

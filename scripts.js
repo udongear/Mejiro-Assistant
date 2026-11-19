@@ -27,7 +27,7 @@ function freshState() {
   return {
     user: null,
     bets: [],
-    exoticInfo: {},  // your edits to the exotic wager table (Exotic Wagering → More Info): { "Exacta": { min, payout } }
+    exoticInfo: {},  // your edits to the exotic wager table (Wagering → Exotic → More Info): { "Exacta": { min, payout } }
     matrix: DEFAULT_MATRIX.map(t => ({ ...t })),
     settings: { ...DEFAULT_SETTINGS },
   };
@@ -52,7 +52,7 @@ function readLocalState() {
 
 // strategies and strategyCategories are notes from the old Strategies tab: no longer shown, but kept
 // (the prefs document is rewritten whole on save, so dropping them here would delete them)
-const PREF_KEYS = ['settings', 'matrix', 'rateView', 'strategies', 'strategyCategories', 'racesShown', 'exoticInfo', 'exoticField', 'exoticModel', 'exoticBreeds', 'exoticTargets', 'earningsView'];
+const PREF_KEYS = ['settings', 'matrix', 'rateView', 'strategies', 'strategyCategories', 'racesShown', 'exoticInfo', 'exoticField', 'exoticModel', 'exoticBreeds', 'exoticTargets', 'earningsView', 'haltedWagers'];
 
 let fb = null;  // { auth, db } once Firebase is set up
 let synced = { prefs: '', bets: new Map(), cards: '' };  // last known Firestore copy (bet id → JSON)
@@ -370,6 +370,8 @@ document.addEventListener('click', e => {
 
 // Win / Place / Show bets and exotic wagers live side by side: one list of bets, one balance
 const isExoticType = type => EXOTIC_INFO.some(d => d.name === type);
+// A wager dropped from the site (Super High Five): old bets of it still show and count, but it isn't offered
+const isRetired = type => EXOTIC_INFO.some(d => d.name === type && d.retired);
 
 function renderAll() {
   renderUser();
@@ -405,7 +407,7 @@ function renderTrackSelects() {
   hist.value = betTracks.includes(hv) ? hv : '';
 
   // The Earnings list's wager types: every type, plus any older ones found in your bets
-  const types = [...new Set([...BET_TYPES.map(([t]) => t), ...state.bets.map(b => b.type).filter(Boolean)])];
+  const types = [...new Set([...BET_TYPES.map(([t]) => t).filter(t => !isRetired(t)), ...state.bets.map(b => b.type).filter(Boolean)])];
   const ht = $('#histType'), tv = ht.value;
   ht.innerHTML = '<option value="">All types</option>' + types.map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('');
   ht.value = types.includes(tv) ? tv : '';
@@ -431,7 +433,9 @@ function rateOf(bets) {
 const rateClass = r => (r == null ? '' : r === 0 ? 'rate-zero' : r <= 50 ? 'rate-mid' : 'rate-high');
 
 function renderWinRate() {
-  const exotics = [...EXOTIC_INFO].sort((a, b) => a.stars - b.stars).map(d => d.name);
+  // A retired wager keeps its button only while you have bets of it
+  const exotics = [...EXOTIC_SHOWN].sort((a, b) => a.stars - b.stars).map(d => d.name)
+    .concat(EXOTIC_INFO.filter(d => d.retired && state.bets.some(b => b.type === d.name)).map(d => d.name));
   const stats = {
     all: rateOf(state.bets),
     ...Object.fromEntries([...WPS_TYPES, ...exotics].map(t => [t, rateOf(state.bets.filter(b => b.type === t))])),
@@ -477,6 +481,7 @@ function renderTracker() {
     <div class="stat"><div class="label">Percent Risk</div><div class="value">${tier ? tier.pct + '%' : '—'}</div></div>
     <div class="stat accent balance"><div class="label">Balance</div><div class="value">${money(br)}</div></div>
     <div class="stat"><div class="label">Suggested stake</div><div class="value stake-value">${money(suggestedStake())}</div></div>`;
+  renderWagerTiles();  // Basic's target wager is the suggested stake
 }
 
 /* ----- Log bets: one row per bet, each with its own date ----- */
@@ -485,12 +490,13 @@ const BET_TYPES = [['Win', '1st'], ['Place', '1st–2nd'], ['Show', '1st–3rd']
   ['Exacta', '1st–2nd in order'], ['Trifecta', '1st–3rd in order'], ['Superfecta', '1st–4th in order'],
   ['Super High Five', '1st–5th in order'], ['Pick 3', 'winners of 3 races'], ['Pick 5', 'winners of 5 races']];
 
-// Win / Place / Show (with the places they pay on), then the exotic wagers by name
+// Win / Place / Show (with the places they pay on), then the exotic wagers by name. A retired wager
+// (Super High Five) only appears on a row that already has it, such as one from a CSV import.
 const betTypeOptions = selected => {
   const opt = ([t, places]) => `<option value="${t}" ${selected === t ? 'selected' : ''}>${t}${isExoticType(t) ? '' : ` (${places})`}</option>`;
   return '<option value="">Select…</option>' +
     `<optgroup label="Win / Place / Show">${BET_TYPES.filter(([t]) => !isExoticType(t)).map(opt).join('')}</optgroup>` +
-    `<optgroup label="Exotic">${BET_TYPES.filter(([t]) => isExoticType(t)).map(opt).join('')}</optgroup>`;
+    `<optgroup label="Exotic">${BET_TYPES.filter(([t]) => isExoticType(t) && (!isRetired(t) || selected === t)).map(opt).join('')}</optgroup>`;
 };
 
 // Refreshes each row's Bet type list, keeping its choice
@@ -1197,20 +1203,7 @@ function renderRaces() {
 
   $('#exoticCard').classList.toggle('hidden', !tracks.length);
   $('#exoticEmpty').classList.toggle('hidden', !!tracks.length);
-  // Easiest to hardest, by the same difficulty stars as the exotic wager table (More Info),
-  // colored the same way: vertical (one race) in cyan, horizontal (several races) in pink.
-  // Each shows today's 10 most likely tickets for that wager underneath; above it is its target wager.
-  $('#exoticTiles').innerHTML = [...EXOTIC_INFO].sort((a, b) => a.stars - b.stars).map(d => `
-    <div class="exotic-slot">
-      <div class="target-wager ${d.kind}" title="How much you mean to stake on each ${esc(d.name)}. Change it in More Info → Edit numbers.">
-        <span>Target wager</span>
-        <b class="target-amount">${money(exoticTarget(d.name))}</b>
-      </div>
-      <button type="button" class="exotic-tile ${d.kind}" data-calc="${esc(d.name)}" title="Today's 10 most likely ${esc(d.name)} tickets">
-        <span class="tile-play" aria-hidden="true">${PLAY_SVG}</span>
-        <b>${esc(d.name)}</b>${starsHTML(d.stars)}<span class="tile-desc">${esc(d.short)}</span>
-        <span class="kind-tag ${d.kind}">${d.kind === 'vertical' ? 'Single Race' : 'Multiple Races'}</span></button>
-    </div>`).join('');
+  renderWagerTiles();
   renderModelToggle();
   renderBreedFilter();
   if (tracks.length) renderExoticResults();
@@ -1295,12 +1288,66 @@ $('#racesTracks').addEventListener('click', async e => {
   renderRaces();
 });
 
+/* ----- Wagering tiles: Basic (Win, Place, Show) on the left, Exotic on the right, each easiest to
+   hardest by its difficulty stars and colored by kind: basic in lavender, vertical (one race) in cyan,
+   horizontal (several races) in pink. Each shows today's 10 most likely tickets for that wager
+   underneath. Above it: its target wager (Basic: the Tracker's suggested stake; Exotic: More Info's
+   Wager column) and a checkbox. Unchecking it halts that wager: greyed out as a reminder not to
+   play it for now, until it's checked again (state.haltedWagers). ----- */
+
+const isHalted = name => (state.haltedWagers || []).includes(name);
+const wagerTarget = d => (d.kind === 'basic' ? suggestedStake() : exoticTarget(d.name));
+
+function wagerSlotHTML(d, max) {
+  const halted = isHalted(d.name);
+  const where = d.kind === 'basic' ? 'your suggested stake on the Tracker (balance × the Risk Matrix %)' : 'More Info → Edit numbers';
+  return `
+    <div class="exotic-slot ${halted ? 'halted' : ''}" data-slot="${esc(d.name)}">
+      <div class="target-wager ${d.kind}">
+        <label class="halt-check" title="${halted ? `${esc(d.name)} is halted. Check to play it again` : `Uncheck to halt ${esc(d.name)} for now`}">
+          <input type="checkbox" data-halt="${esc(d.name)}" ${halted ? '' : 'checked'} aria-label="Play ${esc(d.name)} (uncheck to halt it)">
+          <span class="halt-box" aria-hidden="true">${CHECK_SVG}</span>
+        </label>
+        <span class="target-label" title="How much you mean to stake on each ${esc(d.name)}: ${where}">Target wager</span>
+        <b class="target-amount">${money(wagerTarget(d))}</b>
+      </div>
+      <button type="button" class="exotic-tile ${d.kind}" data-calc="${esc(d.name)}" title="Today's 10 most likely ${esc(d.name)} tickets">
+        <span class="tile-play" aria-hidden="true">${PLAY_SVG}</span>
+        <b>${esc(d.name)}</b>${starsHTML(d.stars, max)}<span class="tile-desc">${esc(d.short)}</span>
+        <span class="tile-tags"><span class="kind-tag ${d.kind}">${d.kind === 'horizontal' ? 'Multiple Races' : 'Single Race'}</span>
+          ${halted ? '<span class="halt-tag">Halted</span>' : ''}</span></button>
+    </div>`;
+}
+
+function renderWagerTiles() {
+  $('#basicTiles').innerHTML = BASIC_INFO.map(d => wagerSlotHTML(d, BASIC_INFO.length)).join('');
+  $('#exoticTiles').innerHTML = [...EXOTIC_SHOWN].sort((a, b) => a.stars - b.stars).map(d => wagerSlotHTML(d, STAR_MAX)).join('');
+  if (exoticPick) $$('#exoticCard [data-calc]').forEach(t => {
+    t.classList.toggle('active', t.dataset.calc === exoticPick);
+    t.setAttribute('aria-pressed', t.dataset.calc === exoticPick);
+  });
+}
+
 // Pressing a tile shows its top 10 under the tiles; pressing it again hides them
 $('#exoticCard').addEventListener('click', e => {
   const tile = e.target.closest('[data-calc]');
   if (!tile) return;
   exoticPick = exoticPick === tile.dataset.calc ? null : tile.dataset.calc;
   renderExoticResults();
+});
+
+// The halt checkbox: the tiles are redrawn, with focus put back on it
+$('#exoticCard').addEventListener('change', e => {
+  const box = e.target.closest('[data-halt]');
+  if (!box) return;
+  const name = box.dataset.halt;
+  state.haltedWagers = box.checked ? (state.haltedWagers || []).filter(n => n !== name) : [...new Set([...(state.haltedWagers || []), name])];
+  save();
+  renderWagerTiles();
+  const again = $(`#exoticCard [data-halt="${CSS.escape(name)}"]`);
+  if (again) again.focus();
+  renderExoticResults();
+  toast(box.checked ? `${name} is back on` : `${name} halted`);
 });
 
 /* Clicking a top-10 ticket cycles its mark: none (its rank) → bet (green check, tinted green)
@@ -1368,7 +1415,7 @@ $('#exoticResults').addEventListener('keydown', e => {
 });
 
 /* =========================================================
-   Exotic calculator — each Exotic Wagering tile runs it over every race scraped today. It turns
+   Wager calculator — each Wagering tile runs it over every race scraped today. It turns
    each runner's career record into chances for its race, then chains them into combinations;
    the day's 10 most likely tickets for that wager show under the tiles.
    1. Shrink each record toward an average horse (1 in 8 to finish 1st, 2nd or 3rd) by adding
@@ -1378,14 +1425,16 @@ $('#exoticResults').addEventListener('keydown', e => {
       3rd = exactly 3rd, 4th and 5th = adjusted top-3 rate (there's no 4th/5th data). A horse's
       chance at a position = its strength ÷ the strengths of the runners not yet placed.
    4. Pick 3 / Pick 5: one winner per race, races independent, so the legs' win chances multiply.
+   5. Win / Place / Show: a horse's chance of finishing in the top 1, 2 or 3, adding up every
+      finishing order from step 3 that has it there (Win is just its win chance).
    Runners with 3 or fewer starts (or no record) still count against everyone, but are never
    suggested; a race where they're over a third of the field is skipped. Scratches are removed.
    1 and 1A are one betting interest. A one-race wager is skipped unless the field (after scratches) is
-   bigger than its places, as TwinSpires doesn't offer it otherwise: Superfecta needs 5+, Super High Five 6+.
+   bigger than its places, as TwinSpires doesn't offer it otherwise: Superfecta needs 5+, Show 4+.
    Only the race types turned on under the model switch are searched (Thoroughbred until you change it);
    a Pick run is left out if any of its races is a type that's off.
 
-   ML Model (the toggle at the top of the Exotic Wagering tab) starts from the morning line instead,
+   ML Model (the toggle at the top of the Wagering tab) starts from the morning line instead,
    and keeps the steps above as a smaller second opinion:
    a. Each line becomes a win chance (9/2 = 2 in 11); a coupled entry's one line is split between
       its horses, and the field is scaled to 100% (the line adds up to more: the track's cut).
@@ -1399,7 +1448,7 @@ $('#exoticResults').addEventListener('keydown', e => {
 const CALC = { K: 10, minStarts: 4, maxUnknownShare: 1 / 3, results: 10 };
 const ML_MODEL = { lifeWeight: 0.5, discount: [1, 0.81, 0.65, 0.65, 0.65] };
 
-// Which model the Exotic Wagering tab uses: 'life' (career records) or 'ml' (morning line + records)
+// Which model the Wagering tab uses: 'life' (career records) or 'ml' (morning line + records)
 const exoticModel = () => (state.exoticModel === 'ml' ? 'ml' : 'life');
 const todayHasML = () => racesTracks(today()).some(t => Object.values(t.card.races).some(r => r.entrants.some(e => mlChance(e.ml) != null)));
 
@@ -1467,8 +1516,9 @@ const cloth = num => {
 };
 
 // One race's runners with their adjusted strengths, plus why the race can't be used ('' if it can).
-// `need` is how many qualified runners the bet needs in this race; `model` is 'life' or 'ml'.
-function raceModel(race, need, model = 'life') {
+// `need` is how many qualified runners the bet needs in this race; `model` is 'life' or 'ml';
+// `places` is how many finishers the bet covers (Show covers 3 but needs only 1 qualified runner).
+function raceModel(race, need, model = 'life', places = need) {
   const { K, minStarts, maxUnknownShare } = CALC;
   const field = race.entrants.filter(e => !e.scratched).map(e => {
     const n = e.starts ?? 0;
@@ -1486,10 +1536,10 @@ function raceModel(race, need, model = 'life') {
   field.forEach(h => { h.win = h.pos[0] / total; });
   const thin = field.filter(h => !h.ok);
   // TwinSpires only offers a one-race wager when the field is bigger than the places it covers: no
-  // Superfecta with 4 runners, no Super High Five with 5. A coupled entry (1 and 1A) counts once.
+  // Superfecta with 4 runners, no Show with 3. A coupled entry (1 and 1A) counts once.
   const interests = new Set(field.map(h => h.key)).size;
   let why = !field.length ? 'no runners'
-    : need > 1 && interests <= need ? `only ${interests} runners (needs ${need + 1} or more to be offered)`
+    : places > 1 && interests <= places ? `only ${interests} runners (needs ${places + 1} or more to be offered)`
     : thin.length / field.length > maxUnknownShare ? `${thin.length} of ${field.length} runners have fewer than ${minStarts} starts`
     : field.length - thin.length < need ? `fewer than ${need} runners with ${minStarts}+ starts` : '';
   if (model === 'ml' && field.length) {
@@ -1514,7 +1564,41 @@ function blendMorningLine(field) {
   field.forEach(h => { h.win = h.pos[0] / total; });
 }
 
-// Exacta to Super High Five: the most likely finishing orders, filling one position at a time
+// Win / Place / Show: each betting interest's chance of finishing in the top `places`. Every finishing
+// order for those places is walked (at most 14×13×12), and its chance goes to each interest in it once,
+// so a coupled entry (1 and 1A) hits when either horse does.
+function topBasic(model, places) {
+  const { field } = model;
+  const hit = new Map(), placed = new Set();
+  const walk = (seq, p) => {
+    if (seq.length === places || placed.size === field.length) {
+      new Set(seq.map(h => h.key)).forEach(k => hit.set(k, (hit.get(k) || 0) + p));
+      return;
+    }
+    const at = seq.length;
+    let rest = 0;
+    field.forEach(h => { if (!placed.has(h)) rest += h.pos[at]; });
+    for (const h of field) {
+      if (placed.has(h)) continue;
+      placed.add(h);
+      walk([...seq, h], p * h.pos[at] / rest);
+      placed.delete(h);
+    }
+  };
+  walk([], 1);
+  const byKey = new Map();
+  field.forEach(h => {
+    const x = byKey.get(h.key) || { num: h.key, names: [], ok: false };
+    x.names.push(h.horse);
+    x.ok = x.ok || h.ok;
+    byKey.set(h.key, x);
+  });
+  return [...byKey.values()].filter(x => x.ok)
+    .map(x => ({ p: hit.get(x.num) || 0, legs: [{ num: x.num, name: x.names.join(' & ') }] }))
+    .sort((a, b) => b.p - a.p).slice(0, CALC.results);
+}
+
+// Exacta to Superfecta: the most likely finishing orders, filling one position at a time
 function topVertical(model, legs) {
   const { field } = model;
   const picks = field.filter(h => h.ok);
@@ -1585,10 +1669,11 @@ function calcOptions(track, bet, model, breeds) {
   const races = track.card.races;
   const nums = Object.keys(races).map(Number).sort((a, b) => a - b);
   const shown = n => breeds.includes(raceBreed(races[n]));
-  if (bet.kind === 'vertical') {
+  if (bet.kind !== 'horizontal') {
     return nums.map(n => {
       if (!shown(n)) return { n, label: `Race ${n}`, hidden: true };
-      const m = raceModel(races[n], bet.legs, model);
+      // Win / Place / Show needs one qualified runner; an exotic needs one per place
+      const m = bet.kind === 'basic' ? raceModel(races[n], 1, model, bet.legs) : raceModel(races[n], bet.legs, model);
       return { n, label: `Race ${n}`, why: m.why, models: [m], nums: [n] };
     });
   }
@@ -1615,20 +1700,21 @@ function dayTopCombos(bet, model, breeds) {
     if (o.hidden) return hidden++;
     if (o.why) return skipped.push({ track: t.name, label: o.label, why: o.why });
     searched++;
-    const combos = bet.kind === 'horizontal' ? topHorizontal(o.models, o.nums) : topVertical(o.models[0], bet.legs);
+    const combos = bet.kind === 'horizontal' ? topHorizontal(o.models, o.nums)
+      : bet.kind === 'basic' ? topBasic(o.models[0], bet.legs) : topVertical(o.models[0], bet.legs);
     combos.forEach(c => found.push({ ...c, track: t.name, key: t.key, race: o.n, label: o.label }));
   }));
   return { top: found.sort((a, b) => b.p - a.p).slice(0, CALC.results), searched, skipped, hidden, tracks: tracks.length };
 }
 
 function renderExoticResults() {
-  $$('#exoticTiles [data-calc]').forEach(t => {
+  $$('#exoticCard [data-calc]').forEach(t => {
     const on = t.dataset.calc === exoticPick;
     t.classList.toggle('active', on);
     t.setAttribute('aria-pressed', on);
   });
   const box = $('#exoticResults');
-  const bet = EXOTIC_INFO.find(d => d.name === exoticPick);
+  const bet = wagerInfo(exoticPick);
   const model = exoticModel(), ml = model === 'ml';
   // Captures from before the bookmark read morning lines have none: say how to get them
   if (ml && !todayHasML()) {
@@ -1642,29 +1728,36 @@ function renderExoticResults() {
     box.innerHTML = `<p class="muted small-text xc-hint">Press a wager to see today's 10 most likely tickets across every scraped race.</p>`;
     return;
   }
-  // Recalculated only when the wager, the model, the race types or today's races change, so open sections stay open
+  // Recalculated only when the wager, the model, the race types, the halt or today's races change, so open sections stay open
   const breeds = exoticBreeds();
-  const key = [bet.name, model, breeds.join(','), JSON.stringify(state.cards && state.cards.tracks)].join('|');
+  const halted = isHalted(bet.name);
+  const key = [bet.name, model, breeds.join(','), halted, JSON.stringify(state.cards && state.cards.tracks)].join('|');
   if (box.dataset.key === key) return;
   box.dataset.key = key;
 
   const { top, searched, skipped, hidden, tracks } = dayTopCombos(bet, model, breeds);
   shownTop = top;
-  const horizontal = bet.kind === 'horizontal';
+  const horizontal = bet.kind === 'horizontal', basic = bet.kind === 'basic';
+  // The last steps depend on the wager: one horse's top-N chance, a finishing order, or a run of winners
+  const last = basic ? `
+          <li>${bet.legs === 1 ? 'Win is the horse\'s win chance.' : `${esc(bet.name)} adds up every finishing order where the horse comes ${bet.legs === 2 ? '1st or 2nd' : '1st, 2nd or 3rd'}.`} A coupled entry (1 and 1A) is one ticket, so it counts if either horse does.</li>`
+    : horizontal ? `
+          <li>${esc(bet.name)} multiplies each race's win chances together.</li>`
+    : `
+          <li>${esc(bet.name)} fills one place at a time; horses already placed are taken out at each step.</li>`;
   const how = ml ? `
           <li>Each horse's morning line becomes its win chance (9/2 is 2 in 11), scaled so the field adds up to 100%. A coupled entry's line is split between its horses.</li>
           <li>Favorites win more often than they run 2nd or 3rd, so lower places soften the line's edge (the Benter adjustment).</li>
-          <li>Life stats are a second opinion at half weight: a horse that often runs 2nd gets a nudge for 2nd, a horse that rarely hits the board loses a little.</li>
-          <li>Pick 3 and Pick 5 multiply each race's win chances together.</li>
+          <li>Life stats are a second opinion at half weight: a horse that often runs 2nd gets a nudge for 2nd, a horse that rarely hits the board loses a little.</li>${last}
           <li>Every scraped race is searched, and the 10 most likely tickets of the day are kept.</li>` : `
           <li>Each runner's record is blended with an average horse's, as if it had 10 more ordinary starts, so a hot 2-for-4 doesn't outrank a steady 8-for-40.</li>
           <li>Win chances are scaled so the field adds up to 100%.</li>
-          <li>2nd and 3rd use how often each horse finishes exactly 2nd or 3rd; 4th and 5th use its top-3 rate. Horses already placed are taken out at each step.</li>
-          <li>Pick 3 and Pick 5 multiply each race's win chances together.</li>
+          <li>2nd and 3rd use how often each horse finishes exactly 2nd or 3rd; 4th uses its top-3 rate.</li>${last}
           <li>Every scraped race is searched, and the 10 most likely tickets of the day are kept.</li>`;
   const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
   box.innerHTML = `
     <div class="xc-panel ${bet.kind}">
+      ${halted ? `<p class="halt-note">${esc(bet.name)} is halted. Check its box above the tile when you're ready to play it again.</p>` : ''}
       <div class="xc-head">
         <h3>${esc(bet.name)}: today's top 10 <span class="kind-tag ${bet.kind}">${horizontal ? 'Multiple Races' : 'Single Race'}</span>
           <span class="model-tag">${ml ? 'ML Model' : 'Life Stat Model'}</span></h3>
@@ -1707,7 +1800,7 @@ function renderExoticResults() {
         <ol>${how}
         </ol>
         <p>Runners with fewer than ${CALC.minStarts} starts still count against everyone's chances, but are never suggested. Races where they're more than a third of the field are skipped.
-          ${horizontal ? '' : `So are races with ${bet.legs} or fewer runners left, since TwinSpires only offers a ${esc(bet.name)} when the field is bigger than that.`}
+          ${horizontal || bet.legs === 1 ? '' : `So are races with ${bet.legs} or fewer runners left, since TwinSpires only offers ${esc(bet.name)} when the field is bigger than that.`}
           Only the race types turned on under the model switch are searched (${breeds.map(breedName).join(', ')}); a race whose type the capture couldn't find counts as Thoroughbred.
           ${ml ? 'So is any race where a runner has no morning line. The line is set before betting opens, so it doesn\'t know about late money or track changes (scratched horses are taken out either way).'
             : 'Career records are all it uses: switch to the ML Model to add the morning line.'}</p>
@@ -2525,32 +2618,47 @@ function openTierEditor() {
 
 $('#editTiers').addEventListener('click', openTierEditor);
 
-/* ----- Exotic wagers at a glance (Exotic Wagering → More Info): a sortable reference table. Difficulty
-   is a fixed 1–6 ranking (no two bets share one). Wager is your target wager for each bet, shown above
+/* ----- Exotic wagers at a glance (Wagering → Exotic → More Info): a sortable reference table. Difficulty
+   is a fixed 1–5 ranking (no two bets share one). Wager is your target wager for each bet, shown above
    its tile: it starts at the bet's minimum and, like the average payout, is yours to change (Edit numbers).
      ROI               = average payout ÷ wager
      Possible outcomes = every result with N horses per race: N×(N−1)×… for a vertical bet's
                          `legs` places, N^legs for a horizontal bet's `legs` races
      Break-even        = how often a ticket at your wager must hit to pay for itself: 1 in ROI ----- */
 
-const STAR_MAX = 6;
-const starsHTML = n => `<span class="stars" title="${n} of ${STAR_MAX}" aria-label="${n} of ${STAR_MAX} stars">${'★'.repeat(n)}<span class="off">${'★'.repeat(STAR_MAX - n)}</span></span>`;
+const STAR_MAX = 5;
+const starsHTML = (n, max = STAR_MAX) => `<span class="stars" title="${n} of ${max}" aria-label="${n} of ${max} stars">${'★'.repeat(n)}<span class="off">${'★'.repeat(max - n)}</span></span>`;
 const EXOTIC_INFO = [
   // kind: vertical = several finishers in one race; horizontal = one winner in each of several races
-  // short: the one-liner on the Exotic Wagering tab's tiles
+  // short: the one-liner on the Wagering tab's tiles
   { name: 'Exacta', kind: 'vertical', legs: 2, stars: 1, min: 1, payout: 30, short: '1st and 2nd, in order',
     about: 'Pick the horses that finish 1st and 2nd, in that exact order. A "box" covers both orders for twice the cost.' },
   { name: 'Trifecta', kind: 'vertical', legs: 3, stars: 2, min: 0.5, payout: 100, short: '1st, 2nd and 3rd, in order',
     about: 'Pick the horses that finish 1st, 2nd and 3rd, in that exact order. Boxing 3 horses covers all 6 orders for 6× the cost.' },
   { name: 'Superfecta', kind: 'vertical', legs: 4, stars: 3, min: 0.1, payout: 150, short: '1st through 4th, in order',
     about: 'Pick the horses that finish 1st through 4th, in that exact order. Usually played for 10¢ with several horses boxed, since one exact order rarely hits.' },
-  { name: 'Super High Five', kind: 'vertical', legs: 5, stars: 4, min: 0.2, payout: 1500, short: '1st through 5th, in order',
-    about: 'Pick the horses that finish 1st through 5th, in that exact order. Some tracks run it as a jackpot: the whole pool pays only when exactly one ticket hits, otherwise most of it carries over.' },
-  { name: 'Pick 3', kind: 'horizontal', legs: 3, stars: 5, min: 0.5, payout: 40, short: 'Winners of 3 races in a row',
+  { name: 'Pick 3', kind: 'horizontal', legs: 3, stars: 4, min: 0.5, payout: 40, short: 'Winners of 3 races in a row',
     about: 'Pick the winner of 3 races in a row on one ticket, placed before the first of them. More horses per race means more combinations, and the cost multiplies.' },
-  { name: 'Pick 5', kind: 'horizontal', legs: 5, stars: 6, min: 0.5, payout: 1000, short: 'Winners of 5 races in a row',
+  { name: 'Pick 5', kind: 'horizontal', legs: 5, stars: 5, min: 0.5, payout: 1000, short: 'Winners of 5 races in a row',
     about: 'Pick the winners of 5 races in a row on one ticket. When nobody hits all five, the pool often carries over to the next day, which is how the big payouts build.' },
+  // Retired: no longer on the Wagering tab, in More Info or in Log bets' list. Kept so bets you logged
+  // (or import) of it still show their horses, accuracy and hit rate.
+  { name: 'Super High Five', kind: 'vertical', legs: 5, stars: 5, min: 0.2, payout: 1500, short: '1st through 5th, in order', retired: true,
+    about: 'Pick the horses that finish 1st through 5th, in that exact order.' },
 ];
+const EXOTIC_SHOWN = EXOTIC_INFO.filter(d => !d.retired);
+
+// Basic wagers, for the Wagering tab's left side. Their target wager is the Tracker's suggested stake.
+// Stars run 1–3 among the three.
+const BASIC_INFO = [
+  { name: 'Win', kind: 'basic', legs: 1, stars: 3, short: 'Finishes 1st',
+    about: 'Your horse has to win. It pays the most of the three, and hits least often.' },
+  { name: 'Place', kind: 'basic', legs: 2, stars: 2, short: 'Finishes 1st or 2nd',
+    about: 'Your horse has to finish 1st or 2nd. It pays the same either way, usually less than a win.' },
+  { name: 'Show', kind: 'basic', legs: 3, stars: 1, short: 'Finishes 1st, 2nd or 3rd',
+    about: 'Your horse has to finish in the top 3. It hits most often and pays the least.' },
+];
+const wagerInfo = name => BASIC_INFO.find(d => d.name === name) || EXOTIC_SHOWN.find(d => d.name === name);
 const EXOTIC_COLS = [
   ['name', 'Bet name'], ['stars', 'Difficulty to land'], ['min', 'Wager', 'Your target wager, shown above the bet\'s tile'],
   ['payout', 'Avg payout'], ['roi', 'ROI (payout ÷ wager)'],
@@ -2568,17 +2676,18 @@ const outcomes = (kind, legs, n) => kind === 'vertical'
 
 // `min` holds the Wager column (it began as the min bet, which is still its starting value). Targets
 // typed on the tiles before they moved here (state.exoticTargets) count until you edit that wager.
-const exoticRows = () => EXOTIC_INFO.map(d => {
+const exoticRows = () => EXOTIC_SHOWN.map(d => {
   const mine = (state.exoticInfo || {})[d.name] || {};
   const min = mine.min ?? (state.exoticTargets || {})[d.name] ?? d.min, payout = mine.payout ?? d.payout;
   const roi = min > 0 ? payout / min : 0;
   return { ...d, min, payout, roi, outcomes: outcomes(d.kind, d.legs, fieldSize()), breakeven: roi ? 1 / roi : Infinity };
 });
 
-// Target wager: how much you mean to stake on each exotic, shown above its tile on Exotic Wagering and
+// Target wager: how much you mean to stake on each exotic, shown above its tile on Wagering and
 // filled in as the stake in Log bets. It's this table's Wager column (More Info → Edit numbers).
+// A retired wager isn't in the table, so it falls back to its minimum.
 const exoticTarget = name => {
-  const row = exoticRows().find(r => r.name === name);
+  const row = exoticRows().find(r => r.name === name) || EXOTIC_INFO.find(d => d.name === name);
   return row ? row.min : 0;
 };
 
@@ -2662,8 +2771,8 @@ $('#exoticReset').addEventListener('click', async () => {
   renderRaces();
 });
 
-// The table lives in a popup opened by Exotic Wagering's More Info button. It stays in the page while
-// closed, so its sorting, edits and horses-per-race choice carry on where you left them.
+// The table lives in a popup opened by the More Info button next to Wagering's Exotic heading. It stays
+// in the page while closed, so its sorting, edits and horses-per-race choice carry on where you left them.
 function closeExoticInfo() {
   $('#exoticInfoModal').classList.add('hidden');
   hideTip();
@@ -2671,6 +2780,32 @@ function closeExoticInfo() {
 $('#exoticMoreInfo').addEventListener('click', () => {
   renderExoticTable();
   $('#exoticInfoModal').classList.remove('hidden');
+});
+
+// Basic's More Info: a short look at Win, Place and Show, and where their target wager comes from
+$('#basicMoreInfo').addEventListener('click', () => {
+  const tier = currentTier(bankroll());
+  openModal(`
+    <div class="card-head">
+      <h3>Basic wagers at a glance</h3>
+      <button class="btn tiny-btn ghost" data-close-basic type="button" aria-label="Close">✕</button>
+    </div>
+    <p class="callout"><b>Target wager</b> on Win, Place and Show is your <b>suggested stake</b> from the Tracker:
+      your balance (${money(bankroll())}) × your Risk Matrix % (${tier ? tier.pct + '%' : '—'}) = ${money(suggestedStake())}.
+      It moves as your balance does. Change the % in <b>Settings → Risk Matrix</b>.</p>
+    <div class="table-wrap"><table class="table">
+      <thead><tr><th>Bet name</th><th>Difficulty to land</th><th>Pays when your horse</th><th>How it works</th></tr></thead>
+      <tbody>${BASIC_INFO.map(d => `
+        <tr><td class="bet-cell basic"><b>${esc(d.name)}</b></td><td>${starsHTML(d.stars, BASIC_INFO.length)}</td>
+          <td>${esc(d.short.replace(/^Finishes/, 'finishes'))}</td><td class="muted small-text">${esc(d.about)}</td></tr>`).join('')}</tbody>
+    </table></div>
+    <p class="muted small-text">Each is one horse in one race. The top 10 under each tile is today's horses most likely to land it,
+      using the model and race types chosen at the top of the tab. The usual minimum ticket is $2 ($1 at some tracks).</p>
+    <div class="modal-actions">
+      <button class="btn ghost" type="button" data-goto="settings" data-close-basic>Go to Risk Matrix</button>
+      <button class="btn primary" type="button" data-close-basic>Done</button>
+    </div>`, { wide: true });
+  $('#modalBody').onclick = e => { if (e.target.closest('[data-close-basic]')) closeModal(); };
 });
 $('#exoticInfoClose').addEventListener('click', closeExoticInfo);
 $('#exoticInfoModal').addEventListener('mousedown', e => { if (e.target.id === 'exoticInfoModal') closeExoticInfo(); });

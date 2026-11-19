@@ -45,7 +45,7 @@
       <nav class="nav" id="nav">
         <button data-tab="tracker" class="active">Tracker</button>
         <button data-tab="races">Today's Races</button>
-        <button data-tab="exotic">Exotic Wagering</button>
+        <button data-tab="exotic">Wagering</button>
         <button data-tab="history">Earnings</button>
         <button data-tab="settings">Settings</button>
       </nav>
@@ -119,12 +119,11 @@
         </div>
       </section>
 
-      <!-- ---------- EXOTIC WAGERING ---------- -->
+      <!-- ---------- WAGERING (Basic: Win / Place / Show; Exotic: Exacta to Pick 5) ---------- -->
       <section id="tab-exotic" class="tab">
         <header class="tab-head">
           <div class="head-title">
-            <h2>Exotic Wagering</h2>
-            <button class="btn tiny-btn ghost" id="exoticMoreInfo" type="button">More Info</button>
+            <h2>Wagering</h2>
           </div>
           <div class="exotic-controls">
             <!-- Which numbers the top 10 is built from (see "ML Model" in scripts.js) -->
@@ -145,9 +144,24 @@
           <p class="empty">Go scrape today's tracks in the Today's Races tab first.</p>
           <div style="text-align:center"><button class="btn primary" type="button" data-goto="races">Go to Today's Races</button></div>
         </div>
-        <!-- Each tile shows the day's top 10 tickets for its wager -->
+        <!-- Each tile shows the day's top 10 tickets for its wager: Basic on the left, Exotic on the right -->
         <div class="card exotic-card hidden" id="exoticCard">
-          <div class="exotic-grid" id="exoticTiles"></div>
+          <div class="wager-sections">
+            <div class="wager-section">
+              <div class="wager-section-head">
+                <h3>Basic</h3>
+                <button class="btn tiny-btn ghost" id="basicMoreInfo" type="button">More Info</button>
+              </div>
+              <div class="exotic-grid basic-grid" id="basicTiles"></div>
+            </div>
+            <div class="wager-section">
+              <div class="wager-section-head">
+                <h3>Exotic</h3>
+                <button class="btn tiny-btn ghost" id="exoticMoreInfo" type="button">More Info</button>
+              </div>
+              <div class="exotic-grid" id="exoticTiles"></div>
+            </div>
+          </div>
           <div id="exoticResults"></div>
         </div>
       </section>
@@ -240,7 +254,7 @@
     </div>
   </div>
 
-  <!-- Exotic Wagering → More Info: the exotic wagers at a glance (kept in the page, so its table keeps its controls) -->
+  <!-- Wagering → Exotic → More Info: the exotic wagers at a glance (kept in the page, so its table keeps its controls) -->
   <div id="exoticInfoModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="exoticInfoTitle">
     <div class="modal-card wide">
       <div class="card-head">
@@ -251,13 +265,13 @@
           <button class="btn tiny-btn ghost" id="exoticInfoClose" type="button" aria-label="Close">✕</button>
         </div>
       </div>
-      <p class="callout"><b>Wager</b> is your target wager for each bet, shown above its tile on Exotic Wagering and filled in as the stake in Log bets.
+      <p class="callout"><b>Wager</b> is your target wager for each bet, shown above its tile on Wagering and filled in as the stake in Log bets.
         Each starts at the bet's usual minimum (minimums vary by track); raise it as you earn more with <b>Edit numbers</b>.
         <b>The average payouts are approximations, not real data:</b> rough estimates for a minimum ticket, and payouts swing widely from race to race,
         so when you raise a wager, raise its payout to match what you see.</p>
       <div class="kind-legend">
         <div class="kind-item vertical"><span class="kind-tag vertical">Vertical</span>
-          <p>Every pick is in <b>one race</b>: you're calling the order horses finish in. Exacta, Trifecta, Superfecta and Super High Five.</p></div>
+          <p>Every pick is in <b>one race</b>: you're calling the order horses finish in. Exacta, Trifecta and Superfecta.</p></div>
         <div class="kind-item horizontal"><span class="kind-tag horizontal">Horizontal</span>
           <p>The ticket <b>carries across several races in a row</b>, and you need the winner of each one. Pick 3 and Pick 5.</p></div>
       </div>
