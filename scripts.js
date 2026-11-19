@@ -107,6 +107,22 @@ async function loadAccount(user) {
   }
   state.bets = bets.docs.map(d => d.data());
   synced = snapshot();
+  // Taken after the snapshot, so the save deletes them from your account too
+  if (dropRemovedWagers()) save();
+}
+
+// Super High Five was dropped from Mejiro: its bets (and its numbers in the exotic table) are removed.
+// Returns whether anything was.
+function dropRemovedWagers() {
+  const gone = 'Super High Five';
+  const before = state.bets.length;
+  state.bets = state.bets.filter(b => b.type !== gone);
+  let changed = state.bets.length < before;
+  ['exoticInfo', 'exoticTargets'].forEach(k => {
+    if (state[k] && gone in state[k]) { const { [gone]: _, ...rest } = state[k]; state[k] = rest; changed = true; }
+  });
+  if (state.rateView === gone) { state.rateView = 'all'; changed = true; }
+  return changed;
 }
 
 /* ---------- Helpers ---------- */
@@ -334,8 +350,6 @@ document.addEventListener('click', e => {
 
 // Win / Place / Show bets and exotic wagers live side by side: one list of bets, one balance
 const isExoticType = type => EXOTIC_INFO.some(d => d.name === type);
-// A wager dropped from the site (Super High Five): old bets of it still show and count, but it isn't offered
-const isRetired = type => EXOTIC_INFO.some(d => d.name === type && d.retired);
 
 function renderAll() {
   renderUser();
@@ -370,7 +384,7 @@ function renderTrackSelects() {
   hist.value = betTracks.includes(hv) ? hv : '';
 
   // The Earnings list's wager types: every type, plus any older ones found in your bets
-  const types = [...new Set([...BET_TYPES.map(([t]) => t).filter(t => !isRetired(t)), ...state.bets.map(b => b.type).filter(Boolean)])];
+  const types = [...new Set([...BET_TYPES.map(([t]) => t),...state.bets.map(b => b.type).filter(Boolean)])];
   const ht = $('#histType'), tv = ht.value;
   ht.innerHTML = '<option value="">All types</option>' + types.map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('');
   ht.value = types.includes(tv) ? tv : '';
@@ -396,9 +410,7 @@ function rateOf(bets) {
 const rateClass = r => (r == null ? '' : r === 0 ? 'rate-zero' : r <= 50 ? 'rate-mid' : 'rate-high');
 
 function renderWinRate() {
-  // A retired wager keeps its button only while you have bets of it
-  const exotics = [...EXOTIC_SHOWN].sort((a, b) => a.stars - b.stars).map(d => d.name)
-    .concat(EXOTIC_INFO.filter(d => d.retired && state.bets.some(b => b.type === d.name)).map(d => d.name));
+  const exotics = [...EXOTIC_INFO].sort((a, b) => a.stars - b.stars).map(d => d.name);
   const stats = {
     all: rateOf(state.bets),
     ...Object.fromEntries([...WPS_TYPES, ...exotics].map(t => [t, rateOf(state.bets.filter(b => b.type === t))])),
@@ -445,15 +457,14 @@ function renderTracker() {
 
 const BET_TYPES = [['Win', '1st'], ['Place', '1st–2nd'], ['Show', '1st–3rd'],
   ['Exacta', '1st–2nd in order'], ['Trifecta', '1st–3rd in order'], ['Superfecta', '1st–4th in order'],
-  ['Super High Five', '1st–5th in order'], ['Pick 3', 'winners of 3 races'], ['Pick 5', 'winners of 5 races']];
+  ['Pick 3', 'winners of 3 races'], ['Pick 5', 'winners of 5 races']];
 
-// Win / Place / Show (with the places they pay on), then the exotic wagers by name. A retired wager
-// (Super High Five) only appears on a row that already has it, such as one from a CSV import.
+// Win / Place / Show (with the places they pay on), then the exotic wagers by name
 const betTypeOptions = selected => {
   const opt = ([t, places]) => `<option value="${t}" ${selected === t ? 'selected' : ''}>${t}${isExoticType(t) ? '' : ` (${places})`}</option>`;
   return '<option value="">Select…</option>' +
     `<optgroup label="Win / Place / Show">${BET_TYPES.filter(([t]) => !isExoticType(t)).map(opt).join('')}</optgroup>` +
-    `<optgroup label="Exotic">${BET_TYPES.filter(([t]) => isExoticType(t) && (!isRetired(t) || selected === t)).map(opt).join('')}</optgroup>`;
+    `<optgroup label="Exotic">${BET_TYPES.filter(([t]) => isExoticType(t)).map(opt).join('')}</optgroup>`;
 };
 
 // Refreshes each row's Bet type list, keeping its choice
@@ -903,8 +914,9 @@ function parseCSV(text) {
 }
 
 // TwinSpires pool names, compared in lowercase without spaces or punctuation
+// (Super High Five isn't tracked: the import lists it under "Not tracked here")
 const POOL_TYPES = { win: 'Win', place: 'Place', show: 'Show', exacta: 'Exacta', trifecta: 'Trifecta', superfecta: 'Superfecta',
-  superhighfive: 'Super High Five', superhigh5: 'Super High Five', superhi5: 'Super High Five', sh5: 'Super High Five', pick3: 'Pick 3', pick5: 'Pick 5' };
+  pick3: 'Pick 3', pick5: 'Pick 5' };
 
 // The wagers in a TwinSpires CSV, or null if the file isn't one
 function readTwinSpiresCSV(text) {
@@ -1280,7 +1292,7 @@ function wagerSlotHTML(d, max) {
 
 function renderWagerTiles() {
   $('#basicTiles').innerHTML = BASIC_INFO.map(d => wagerSlotHTML(d, BASIC_INFO.length)).join('');
-  $('#exoticTiles').innerHTML = [...EXOTIC_SHOWN].sort((a, b) => a.stars - b.stars).map(d => wagerSlotHTML(d, STAR_MAX)).join('');
+  $('#exoticTiles').innerHTML = [...EXOTIC_INFO].sort((a, b) => a.stars - b.stars).map(d => wagerSlotHTML(d, STAR_MAX)).join('');
   if (exoticPick) $$('#exoticCard [data-calc]').forEach(t => {
     t.classList.toggle('active', t.dataset.calc === exoticPick);
     t.setAttribute('aria-pressed', t.dataset.calc === exoticPick);
@@ -2484,12 +2496,7 @@ const EXOTIC_INFO = [
     about: 'Pick the winner of 3 races in a row on one ticket, placed before the first of them. More horses per race means more combinations, and the cost multiplies.' },
   { name: 'Pick 5', kind: 'horizontal', legs: 5, stars: 5, min: 0.5, payout: 1000, short: 'Winners of 5 races in a row',
     about: 'Pick the winners of 5 races in a row on one ticket. When nobody hits all five, the pool often carries over to the next day, which is how the big payouts build.' },
-  // Retired: no longer on the Wagering tab, in More Info or in Log bets' list. Kept so bets you logged
-  // (or import) of it still show their horses, accuracy and hit rate.
-  { name: 'Super High Five', kind: 'vertical', legs: 5, stars: 5, min: 0.2, payout: 1500, short: '1st through 5th, in order', retired: true,
-    about: 'Pick the horses that finish 1st through 5th, in that exact order.' },
 ];
-const EXOTIC_SHOWN = EXOTIC_INFO.filter(d => !d.retired);
 
 // Basic wagers, for the Wagering tab's left side. Stars run 1–3 among the three. `min` is the usual
 // minimum ticket, where each target wager starts (state.basicTargets holds yours: { "Win": 5 }).
@@ -2501,7 +2508,7 @@ const BASIC_INFO = [
   { name: 'Show', kind: 'basic', legs: 3, stars: 1, min: 2, short: 'Finishes 1st, 2nd or 3rd',
     about: 'Your horse has to finish in the top 3. It hits most often and pays the least.' },
 ];
-const wagerInfo = name => BASIC_INFO.find(d => d.name === name) || EXOTIC_SHOWN.find(d => d.name === name);
+const wagerInfo = name => BASIC_INFO.find(d => d.name === name) || EXOTIC_INFO.find(d => d.name === name);
 
 // Target wager for Win / Place / Show: shown above its tile and filled in as the stake in Log bets
 const basicTarget = name => {
@@ -2525,7 +2532,7 @@ const outcomes = (kind, legs, n) => kind === 'vertical'
 
 // `min` holds the Wager column (it began as the min bet, which is still its starting value). Targets
 // typed on the tiles before they moved here (state.exoticTargets) count until you edit that wager.
-const exoticRows = () => EXOTIC_SHOWN.map(d => {
+const exoticRows = () => EXOTIC_INFO.map(d => {
   const mine = (state.exoticInfo || {})[d.name] || {};
   const min = mine.min ?? (state.exoticTargets || {})[d.name] ?? d.min, payout = mine.payout ?? d.payout;
   const roi = min > 0 ? payout / min : 0;
@@ -2534,9 +2541,8 @@ const exoticRows = () => EXOTIC_SHOWN.map(d => {
 
 // Target wager: how much you mean to stake on each exotic, shown above its tile on Wagering and
 // filled in as the stake in Log bets. It's this table's Wager column (More Info → Edit numbers).
-// A retired wager isn't in the table, so it falls back to its minimum.
 const exoticTarget = name => {
-  const row = exoticRows().find(r => r.name === name) || EXOTIC_INFO.find(d => d.name === name);
+  const row = exoticRows().find(r => r.name === name);
   return row ? row.min : 0;
 };
 
@@ -3021,6 +3027,7 @@ $('#restoreInput').addEventListener('change', async e => {
     if (!await confirmModal('Restore backup?', 'This replaces all current data with the backup.', 'Restore', true)) return;
     const user = state.user;
     state = { ...freshState(), ...data, settings: { ...DEFAULT_SETTINGS, ...data.settings }, user };
+    dropRemovedWagers();
     save(); renderAll();
     toast('Backup restored');
   } catch (err) {
