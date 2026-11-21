@@ -506,15 +506,18 @@ function syncPayout(tr) {
   if (!won) payout.value = '';
 }
 
-/* ----- Actual winners: for an exotic bet you lost, the horses that really finished
-   (or won each race, for a Pick bet), saved on the bet as program numbers in order ----- */
+/* ----- Actual winners: for a bet you lost, the horses that really finished (or won each race, for a
+   Pick bet), saved on the bet as program numbers in order. Win takes the 1st-place horse, Place the
+   top 2, Show the top 3, an exotic its places (or races). ----- */
 
 const betInfo = type => EXOTIC_INFO.find(d => d.name === type);
+// The finish a bet type records: an exotic's places or races, or Win / Place / Show's top 1, 2 or 3
+const finishInfo = type => betInfo(type) || BASIC_INFO.find(d => d.name === type);
 
 // Saddle cloths in order: 4–7–1 for one race, 4 / 7 / 1 for a Pick bet
 function winnersHTML(winners, info) {
   if (!info || !winners || !winners.length) return '';
-  return `<span class="xc-cloths">${winners.map(n => cloth(n)).join(`<span class="xc-sep">${info.kind === 'vertical' ? '–' : '/'}</span>`)}</span>`;
+  return `<span class="xc-cloths">${winners.map(n => cloth(n)).join(`<span class="xc-sep">${info.kind === 'horizontal' ? '/' : '–'}</span>`)}</span>`;
 }
 
 const picksOf = text => (text ? String(text).split(/[-/,\s]+/).filter(Boolean).map(Number) : []);
@@ -536,40 +539,40 @@ function syncHorse(tr) {
   if (!$('#betRows .horse-btn.invalid')) $('#betError').classList.add('hidden');
 }
 
-// The row's Actual winners button works only for a lost exotic bet; changing the type or result clears it.
+// The row's Actual winners button works only for a lost bet; changing the type or result clears it.
 // data-auto marks winners filled in from another bet on the same race (see "Actual winners fill themselves in").
 function syncWinners(tr) {
   const btn = tr.querySelector('.winners-btn');
-  const info = betInfo(tr.querySelector('[name=type]').value);
+  const info = finishInfo(tr.querySelector('[name=type]').value);
   btn.disabled = !info || tr.querySelector('[name=result]').value !== 'lost';
   if (btn.disabled) { btn.dataset.winners = ''; btn.dataset.auto = ''; }
   const auto = !!btn.dataset.auto && !!btn.dataset.winners;
   btn.classList.toggle('auto', auto);
   btn.innerHTML = winnersHTML(picksOf(btn.dataset.winners), info) || (btn.disabled ? '—' : 'Pick…');
-  btn.title = btn.disabled ? 'For exotic bets you lost'
+  btn.title = btn.disabled ? 'For bets you lost'
     : auto ? 'Filled in from another bet on this race. Click to change' : 'Pick the horses that actually finished';
 }
 
 /* ----- Actual winners fill themselves in: a race's finish, entered on one bet (in Log bets, or on a bet
-   already logged), fills every other lost exotic on the same day, track and race. A one-race exotic takes
-   the first places it needs (a Trifecta's 4-7-1 gives an Exacta 4-7); a Pick bet takes each of its races'
-   winners. Winners you set yourself are never replaced. ----- */
+   already logged), fills every other lost bet on the same day, track and race. A one-race bet takes the
+   first places it needs (a Trifecta's 4-7-1 gives an Exacta 4-7, a Place 4-7 and a Win 4); a Pick bet
+   takes each of its races' winners. Winners you set yourself are never replaced. ----- */
 
 const raceKey = (date, track, race) => [date, String(track || '').trim().toLowerCase(), num(race)].join('|');
 
 // What's known of each race (raceKey → finishing order, winner first): the bets given, then `firm` ones,
-// which win a disagreement. A one-race exotic gives the order as far as it goes; a Pick bet, each race's winner.
+// which win a disagreement. A one-race bet gives the order as far as it goes; a Pick bet, each race's winner.
 function knownFinishes(bets, firm = []) {
   const known = new Map();
   const learn = (b, isFirm) => {
-    const info = betInfo(b.type), w = b.winners;
+    const info = finishInfo(b.type), w = b.winners;
     if (!info || !w || !w.length || !b.date || !b.track || !num(b.race)) return;
     const set = (k, order) => {
       const had = known.get(k) || [];
       const agrees = had.length >= order.length ? order.every((n, i) => had[i] === n) : had.every((n, i) => order[i] === n);
       if (agrees ? order.length > had.length : isFirm) known.set(k, order);
     };
-    if (info.kind === 'vertical') set(raceKey(b.date, b.track, b.race), [...w]);
+    if (info.kind !== 'horizontal') set(raceKey(b.date, b.track, b.race), [...w]);
     else w.forEach((n, i) => set(raceKey(b.date, b.track, num(b.race) + i), [n]));
   };
   bets.forEach(b => learn(b, false));
@@ -577,11 +580,11 @@ function knownFinishes(bets, firm = []) {
   return known;
 }
 
-// The winners a lost exotic gets from what's known, or null if its races aren't known well enough
+// The winners a lost bet gets from what's known, or null if its races aren't known well enough
 function finishFor(b, known) {
-  const info = betInfo(b.type);
+  const info = finishInfo(b.type);
   if (!info) return null;
-  if (info.kind === 'vertical') {
+  if (info.kind !== 'horizontal') {
     const order = known.get(raceKey(b.date, b.track, b.race));
     return order && order.length >= info.legs ? order.slice(0, info.legs) : null;
   }
@@ -589,7 +592,7 @@ function finishFor(b, known) {
   return w.every(Boolean) ? w : null;
 }
 
-// Log bets: fills (or refreshes) the winners of every lost exotic row that you haven't set yourself
+// Log bets: fills (or refreshes) the winners of every lost row that you haven't set yourself
 function autofillWinners() {
   const rowBet = tr => {
     const v = n => tr.querySelector(`[name=${n}]`).value;
@@ -617,7 +620,7 @@ const PICKER_MAX = 16;  // program numbers on the picker
 // your picks and the actual winners.
 function openNumPicker(anchor, info, current, firstRace, onClose, title) {
   closeNumPicker();
-  const vertical = info.kind === 'vertical';
+  const vertical = info.kind !== 'horizontal';  // one race: no horse twice
   title = title || (vertical ? 'Actual finish' : 'Race winners');
   let seq = (current || []).slice(0, info.legs);
   let closed = false;
@@ -625,7 +628,8 @@ function openNumPicker(anchor, info, current, firstRace, onClose, title) {
   el.className = 'num-picker';
   el.setAttribute('role', 'dialog');
   el.setAttribute('aria-label', `${title} for the ${info.name}`);
-  const slotName = i => info.legs === 1 ? 'Horse' : vertical ? ['1st', '2nd', '3rd', '4th', '5th'][i] : firstRace ? `R${firstRace + i}` : `Leg ${i + 1}`;
+  // One slot is your horse, except a Win's actual finish, which is the 1st-place horse
+  const slotName = i => info.legs === 1 && info.kind !== 'basic' ? 'Horse' : vertical ? ['1st', '2nd', '3rd', '4th', '5th'][i] : firstRace ? `R${firstRace + i}` : `Leg ${i + 1}`;
   const draw = () => {
     el.innerHTML = `
       <div class="np-head"><b>${esc(title)}</b><span>${esc(info.name)}</span></div>
@@ -817,7 +821,7 @@ $('#betRows').addEventListener('click', e => {
   if (pick) {
     const tr = pick.closest('tr');
     // Winners you pick are yours (never replaced), and fill in the other bets on the same race
-    return toggleNumPicker(pick, betInfo(tr.querySelector('[name=type]').value), picksOf(pick.dataset.winners), num(tr.querySelector('[name=race]').value),
+    return toggleNumPicker(pick, finishInfo(tr.querySelector('[name=type]').value), picksOf(pick.dataset.winners), num(tr.querySelector('[name=race]').value),
       seq => {
         if (seq.join(',') === pick.dataset.winners) return;
         pick.dataset.winners = seq.join(',');
@@ -854,7 +858,7 @@ $('#betForm').addEventListener('submit', e => {
   const logged = rows.map(tr => {
     const v = n => tr.querySelector(`[name=${n}]`);
     const status = v('result').value;
-    const info = betInfo(v('type').value);
+    const info = finishInfo(v('type').value);
     const winners = tr.querySelector('.winners-btn').dataset.winners;
     return {
       id: uid(),
@@ -1019,7 +1023,7 @@ $('#importCsv').addEventListener('change', async e => {
   const tooBig = fresh.filter(b => b.tooBig);
   const needPicks = fresh.filter(b => !b.picks.length && !b.tooBig).length;
   const notes = [
-    fresh.length ? `Filled in ${plural(fresh.length, 'bet')} from TwinSpires. Check them, add anything missing${fresh.some(b => isExoticType(b.type) && b.result === 'lost') ? ' (like Actual winners for lost exotics)' : ''}, then log.` : 'No new bets to fill in.',
+    fresh.length ? `Filled in ${plural(fresh.length, 'bet')} from TwinSpires. Check them, add anything missing${fresh.some(b => b.result === 'lost') ? ' (like Actual winners for lost bets)' : ''}, then log.` : 'No new bets to fill in.',
     splits.length ? `${plural(splits.length, 'ticket')} with several horses in a spot ${splits.length === 1 ? 'was' : 'were'} split into one bet per combination (${plural(splitBets, 'bet')}).` : '',
     ...unsettled.map(b => `${b.track} R${b.race} ${b.type} (${b.split.runners}, ${plural(b.split.count, 'combination')}): ${money(b.split.credit)} back on ${money(b.split.debit)}. ` +
       'TwinSpires doesn\'t say which combination paid, so set each one\'s Result and Total return.'),
@@ -2407,12 +2411,17 @@ function mejiroCapture(site) {
       copyButton();
       return;
     }
-    /* Every track TwinSpires lists starts ticked */
+    /* Every track TwinSpires lists starts ticked, except these, which never have data to read (they can
+       still be ticked by hand). Compared by name in lowercase, letters and numbers only. */
+    const SKIP = ['Laurel Park', 'Gulfstream Park', 'Del Mar Turf Pick 3'];
+    const bare = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const skipped = t => SKIP.some(s => bare(s) === bare(t.name));
     const label = 'display:flex;gap:8px;align-items:center;padding:2px 0;cursor:pointer';
     show(`<div>Today's tracks on TwinSpires (${tracks.length}).</div>` +
       `<label style="${label};margin-top:8px;color:#C8B4FF"><input type="checkbox" id="mc-upcoming" checked> Only races that haven't run yet</label>` +
       `<div style="margin-top:6px;max-height:40vh;overflow:auto">` +
-      tracks.map((t, i) => `<label style="${label}"><input type="checkbox" data-i="${i}" checked> ${html(t.name)}` +
+      tracks.map((t, i) => `<label style="${label}"><input type="checkbox" data-i="${i}" ${skipped(t) ? '' : 'checked'}> ${html(t.name)}` +
+        (skipped(t) ? '<span style="font-size:11px;color:#9C92BC">(off by default)</span>' : '') +
         `<span style="margin-left:auto;font-size:12px;color:#9C92BC">${t.finished ? 'finished' : `R${t.race}${t.status ? ' · ' + html(t.status) : ''}`}</span></label>`).join('') + '</div>' +
       button('mc-toggle', 'Deselect all') + '<br>' + button('mc-go', 'Capture ticked tracks', true) + button('mc-close', 'Close') +
       note('It keeps going if you switch to another tab. The summary at the end says how long it took.'));
@@ -2421,6 +2430,7 @@ function mejiroCapture(site) {
     const syncToggle = () => { toggle.textContent = allOn() ? 'Deselect all' : 'Select all'; };
     toggle.onclick = () => { const on = !allOn(); boxes.forEach(c => { c.checked = on; }); syncToggle(); };
     boxes.forEach(c => { c.onchange = syncToggle; });
+    syncToggle();
     box.querySelector('#mc-close').onclick = finish;
     box.querySelector('#mc-go').onclick = async () => {
       const picked = boxes.filter(c => c.checked).map(c => tracks[+c.dataset.i]);
@@ -2859,9 +2869,9 @@ function renderHistory() {
       <div class="sub">${decided.length ? (wins.length / decided.length * 100).toFixed(0) + '% hit rate' : '—'}</div></div>
     <div class="stat"><div class="label">Best win</div><div class="value ${plClass(best)}">${money(best, true)}</div></div>`;
 
-  // For a lost exotic bet: what actually came in (pick or change it any time)
+  // For a lost bet: what actually came in (pick or change it any time)
   const winnersCell = b => {
-    const info = betInfo(b.type);
+    const info = finishInfo(b.type);
     if (b.status !== 'lost' || !info) return '<td class="muted">—</td>';
     return `<td><button type="button" class="winners-btn" data-hist-winners="${b.id}"
       title="${b.winners && b.winners.length ? 'Change' : 'Add'} the horses that actually finished">${winnersHTML(b.winners, info) || '+ Add'}</button></td>`;
@@ -2913,15 +2923,15 @@ $('#histTable').addEventListener('click', async e => {
   const pick = e.target.closest('[data-hist-winners]');
   if (pick) {
     const bet = state.bets.find(b => b.id === pick.dataset.histWinners);
-    return toggleNumPicker(pick, betInfo(bet.type), bet.winners, num(bet.race), seq => {
+    return toggleNumPicker(pick, finishInfo(bet.type), bet.winners, num(bet.race), seq => {
       if (seq.join() === (bet.winners || []).join()) return;
       if (seq.length) bet.winners = seq; else delete bet.winners;
-      // The same finish fills in your other lost exotics on that race that don't have winners yet
+      // The same finish fills in your other lost bets on that race that don't have winners yet
       let filled = 0;
       if (seq.length) {
         const known = knownFinishes(state.bets, [bet]);
         state.bets.forEach(o => {
-          if (o === bet || o.status !== 'lost' || !betInfo(o.type) || (o.winners && o.winners.length)) return;
+          if (o === bet || o.status !== 'lost' || !finishInfo(o.type) || (o.winners && o.winners.length)) return;
           const fill = finishFor(o, known);
           if (fill) { o.winners = fill; filled++; }
         });
