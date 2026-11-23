@@ -2413,7 +2413,7 @@ function mejiroCapture(site) {
     }
     /* Every track TwinSpires lists starts ticked, except these, which never have data to read (they can
        still be ticked by hand). Compared by name in lowercase, letters and numbers only. */
-    const SKIP = ['Gulfstream Park', 'Del Mar Turf Pick 3'];
+    const SKIP = ['Gulfstream Park', 'Gulfstream Simulcast', 'Laurel Simulcast', 'Del Mar Turf Pick 3'];
     const bare = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
     const skipped = t => SKIP.some(s => bare(s) === bare(t.name));
     const label = 'display:flex;gap:8px;align-items:center;padding:2px 0;cursor:pointer';
